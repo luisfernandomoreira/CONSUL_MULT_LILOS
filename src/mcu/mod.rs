@@ -10,6 +10,7 @@
 //! aqui: todos vêm do PAC.
 //! =============================================================
 
+pub mod adc;
 pub mod clock;
 pub mod flash;
 pub mod gpio;

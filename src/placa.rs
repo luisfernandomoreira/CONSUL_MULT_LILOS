@@ -1,255 +1,249 @@
 //! =============================================================
 //! Placa CONSUL MULT — mapa de pinos e agrupamentos de hardware
 //!
-//! É AQUI (e só aqui) que se mexe quando a placa muda.
-//! O resto do firmware fala em nomes — `painel.pesada`, `at.motor_a`,
-//! `entradas.tampa` — e nunca em "PA7" ou "PB2".
+//! É AQUI (e só aqui) que se mexe quando a placa muda. O resto do
+//! firmware fala em nomes — `s.bomba(true)`, `e.tampa_aberta()` — e
+//! nunca em "PA9" ou "PB2".
 //!
-//! O GD32C231K8T6 (LQFP32) é pino a pino idêntico ao STM32C031K6T6
-//! (LQFP32) usado na versão anterior, então o mapa abaixo é exatamente
-//! o mesmo do firmware Embassy original.
+//! O mapa abaixo é o do firmware C++ de fábrica
+//! (`controle_hardware.hpp` + `CONSUL_MULT_V1.ioc`). O GD32C231K8T6
+//! (LQFP32) é pino a pino igual ao STM32C031K6T6 (LQFP32), então os
+//! nomes de pino são os mesmos.
 //!
 //! ─── Lógica elétrica ─────────────────────────────────────────
-//!   LEDs e triacs  : INVERTIDOS → nível BAIXO liga, ALTO desliga
-//!   Botões         : pull-up interno → nível BAIXO = pressionado
-//!   Sensores nível : pull-down interno → nível ALTO = nível atingido
-//!   Tampa (PB1)    : nível ALTO = tampa ABERTA
+//!   LEDs e triacs     : INVERTIDOS → nível BAIXO liga, ALTO desliga
+//!                       (no C++, ControlarPino(.., true) escreve no
+//!                        BRR, ou seja, leva o pino a nível baixo)
+//!   Chave SW1..SW4    : pull-up interno
+//!   Encoder           : pull-down interno
+//!   Pressostato (PA5) : sem pull; nível BAIXO = cheio
+//!   Tampa (PA4)       : pull-up; nível ALTO = ABERTA
+//!   Tampa mecânica    : PA7, sem pull; nível ALTO = ABERTA
+//!   Botões do painel  : PA6, analógico (divisor resistivo, ver `botoes`)
+//!
+//! ─── Dois pinos com dois nomes ───────────────────────────────
+//! O firmware C++ dá dois nomes a dois pinos, e o porte mantém isso:
+//!
+//!   PA9 → `motor_c` e `motor_pulse`   (centrifugação / pulso)
+//!   PA3 → `atuador` e `valvula_amaciante`
+//!
+//! Não é erro de digitação: é o mesmo triac acionado por dois
+//! caminhos lógicos do ciclo. Mexer num mexe no outro.
 //! =============================================================
 
 use crate::mcu::clock;
-use crate::mcu::gpio::{Entrada, Pino, Porta, Pull, Saida};
+use crate::mcu::gpio::{Analogico, Entrada, Pino, Porta, Pull, Saida};
 use crate::mcu::pac::Rcu;
-use crate::programa::Programa;
 
-// ─── Nível que DESLIGA uma saída invertida ───────────────────────────────────
+// ─── Níveis de uma saída invertida ───────────────────────────────────────────
 const DESLIGADO: bool = true; // nível alto
 const LIGADO: bool = false; // nível baixo
 
-// ─── Mapa de pinos da placa ──────────────────────────────────────────────────
+#[inline(always)]
+fn nivel(ligar: bool) -> bool {
+    if ligar {
+        LIGADO
+    } else {
+        DESLIGADO
+    }
+}
+
+// ─── Mapa de pinos ───────────────────────────────────────────────────────────
 // Trocou a placa de lugar? Mude só estas constantes.
 mod pino {
     use super::{Pino, Porta};
 
-    // LEDs dos 5 programas
-    pub const LED_PESADA: Pino = Pino::novo(Porta::A, 7);
-    pub const LED_NORMAL: Pino = Pino::novo(Porta::A, 6);
-    pub const LED_RAPIDO: Pino = Pino::novo(Porta::A, 4);
-    pub const LED_ENXAGUAR: Pino = Pino::novo(Porta::A, 1);
-    pub const LED_CENTRIFUGAR: Pino = Pino::novo(Porta::A, 0);
+    // Saídas de potência (triacs)
+    pub const BOMBA: Pino = Pino::novo(Porta::B, 2);
+    /// Também é a válvula de amaciante — mesmo triac.
+    pub const ATUADOR: Pino = Pino::novo(Porta::A, 3);
+    /// Também é o pulso de motor (`motor_pulse`) — mesmo triac.
+    pub const MOTOR_C: Pino = Pino::novo(Porta::A, 9);
+    pub const MOTOR_A: Pino = Pino::novo(Porta::C, 6);
+    pub const VALVULA_SABAO: Pino = Pino::novo(Porta::A, 2);
 
-    // LEDs das opções
-    pub const LED_ENXAGUE_EXTRA: Pino = Pino::novo(Porta::A, 11);
-    pub const LED_TURBO: Pino = Pino::novo(Porta::A, 15);
-    pub const LED_AMACIANTE: Pino = Pino::novo(Porta::C, 6);
-    pub const LED_NIVEL_MEDIO: Pino = Pino::novo(Porta::A, 3);
-    pub const LED_NIVEL_ALTO: Pino = Pino::novo(Porta::A, 2);
-
-    // Triacs da placa de potência
-    pub const MOTOR_C: Pino = Pino::novo(Porta::B, 2); // centrifugação
-    pub const MOTOR_A: Pino = Pino::novo(Porta::A, 8); // agitação
-    pub const ELETROBOMBA: Pino = Pino::novo(Porta::A, 9); // drenagem
-    pub const VALVULA_SABAO: Pino = Pino::novo(Porta::B, 6);
-    pub const VALVULA_AMACIANTE: Pino = Pino::novo(Porta::B, 0);
-
-    // Botões do painel
-    pub const BT_ON_OFF: Pino = Pino::novo(Porta::C, 14);
-    pub const BT_SELETOR: Pino = Pino::novo(Porta::A, 5);
-    pub const BT_NIVEL: Pino = Pino::novo(Porta::C, 15);
-    pub const BT_ENXAGUE_EXTRA: Pino = Pino::novo(Porta::A, 12);
-    pub const BT_TURBO: Pino = Pino::novo(Porta::B, 9);
-    pub const BT_AMACIANTE: Pino = Pino::novo(Porta::A, 10);
+    // LEDs do painel
+    pub const LED_PAUSE: Pino = Pino::novo(Porta::A, 1); // ON/OFF
+    pub const LED_MAIS_SECAS: Pino = Pino::novo(Porta::C, 14);
+    pub const LED_ENXAGUE_DUPLO: Pino = Pino::novo(Porta::B, 9);
 
     // Sensores
-    pub const SENSOR_NIVEL_MEDIO: Pino = Pino::novo(Porta::B, 7);
-    pub const SENSOR_NIVEL_ALTO: Pino = Pino::novo(Porta::B, 8);
-    pub const TAMPA: Pino = Pino::novo(Porta::B, 1);
+    pub const PRESSOSTATO: Pino = Pino::novo(Porta::A, 5);
+    pub const TAMPA: Pino = Pino::novo(Porta::A, 4);
+    pub const TAMPA_MECANICA: Pino = Pino::novo(Porta::A, 7);
+
+    // Chave de modelo da lavadora
+    pub const SW1: Pino = Pino::novo(Porta::A, 12);
+    pub const SW2: Pino = Pino::novo(Porta::A, 11);
+    pub const SW3: Pino = Pino::novo(Porta::B, 8);
+    pub const SW4: Pino = Pino::novo(Porta::B, 7);
+
+    // Encoder de programa (4 trilhas). Os nomes 1/3/4/5 vêm do C++.
+    pub const ENC_1: Pino = Pino::novo(Porta::B, 4);
+    pub const ENC_3: Pino = Pino::novo(Porta::B, 3);
+    pub const ENC_4: Pino = Pino::novo(Porta::B, 5);
+    pub const ENC_5: Pino = Pino::novo(Porta::B, 6);
+
+    // Botões do painel, por divisor resistivo
+    pub const BOTOES_AD: Pino = Pino::novo(Porta::A, 6);
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// PAINEL — os 10 LEDs
+// SAÍDAS — triacs e LEDs
 // ═════════════════════════════════════════════════════════════════════════════
 
-pub struct Painel {
-    pub pesada: Saida,
-    pub normal: Saida,
-    pub rapido: Saida,
-    pub enxaguar: Saida,
-    pub centrifugar: Saida,
-    pub enxague_extra: Saida,
-    pub turbo: Saida,
-    pub amaciante: Saida,
-    pub nivel_medio: Saida,
-    pub nivel_alto: Saida,
+pub struct Saidas {
+    bomba: Saida,
+    atuador: Saida,
+    motor_c: Saida,
+    motor_a: Saida,
+    valvula_sabao: Saida,
+    led_pause: Saida,
+    led_mais_secas: Saida,
+    led_enxague_duplo: Saida,
 }
 
-impl Painel {
-    /// Apaga os 5 LEDs de programa.
-    pub fn apaga_programas(&self) {
-        self.pesada.escreve(DESLIGADO);
-        self.normal.escreve(DESLIGADO);
-        self.rapido.escreve(DESLIGADO);
-        self.enxaguar.escreve(DESLIGADO);
-        self.centrifugar.escreve(DESLIGADO);
+impl Saidas {
+    // ─── Triacs ──────────────────────────────────────────────────────────────
+
+    pub fn bomba(&self, ligar: bool) {
+        self.bomba.escreve(nivel(ligar));
     }
 
-    /// Acende apenas o LED do programa indicado; apaga os outros.
-    pub fn mostra_programa(&self, p: Programa) {
-        self.apaga_programas();
-        self.led_do_programa(p).escreve(LIGADO);
+    /// Atuador da transmissão. **Mesmo pino da válvula de amaciante.**
+    pub fn atuador(&self, ligar: bool) {
+        self.atuador.escreve(nivel(ligar));
     }
 
-    fn led_do_programa(&self, p: Programa) -> &Saida {
-        match p {
-            Programa::Pesada => &self.pesada,
-            Programa::Normal => &self.normal,
-            Programa::Rapido => &self.rapido,
-            Programa::Enxaguar => &self.enxaguar,
-            Programa::Centrifugar => &self.centrifugar,
-        }
-    }
-
-    /// Reflete as opções escolhidas nos LEDs correspondentes.
-    ///
-    /// Com a máquina desligada todos ficam apagados.
-    pub fn mostra_opcoes(&self, o: &crate::opcoes::Opcoes, maquina_ligada: bool) {
-        let ligado = |v: bool| {
-            if maquina_ligada && v {
-                LIGADO
-            } else {
-                DESLIGADO
-            }
-        };
-        self.enxague_extra.escreve(ligado(o.enxague_extra));
-        self.turbo.escreve(ligado(o.turbo));
-        self.amaciante.escreve(ligado(o.amaciante));
-        self.nivel_medio.escreve(ligado(!o.nivel_alto));
-        self.nivel_alto.escreve(ligado(o.nivel_alto));
-    }
-
-    /// Acende os 10 LEDs do painel.
-    pub fn acende_tudo(&self) {
-        for led in self.todos() {
-            led.escreve(LIGADO);
-        }
-    }
-
-    /// Apaga tudo — painel completamente escuro.
-    pub fn apaga_tudo(&self) {
-        self.apaga_programas();
-        self.enxague_extra.escreve(DESLIGADO);
-        self.turbo.escreve(DESLIGADO);
-        self.amaciante.escreve(DESLIGADO);
-        self.nivel_medio.escreve(DESLIGADO);
-        self.nivel_alto.escreve(DESLIGADO);
-    }
-
-    /// Lista de todos os LEDs — usada pela animação de inicialização.
-    pub fn todos(&self) -> [&Saida; 10] {
-        [
-            &self.pesada,
-            &self.normal,
-            &self.rapido,
-            &self.enxaguar,
-            &self.centrifugar,
-            &self.enxague_extra,
-            &self.turbo,
-            &self.amaciante,
-            &self.nivel_medio,
-            &self.nivel_alto,
-        ]
-    }
-}
-
-// ═════════════════════════════════════════════════════════════════════════════
-// ATUADORES — os 5 triacs
-// ═════════════════════════════════════════════════════════════════════════════
-
-pub struct Atuadores {
-    pub motor_c: Saida,
-    pub motor_a: Saida,
-    pub eletrobomba: Saida,
-    pub valvula_sabao: Saida,
-    pub valvula_amaciante: Saida,
-}
-
-impl Atuadores {
-    /// Desliga TODOS os triacs. Chamada no boot, ao abrir a tampa,
-    /// ao desligar e em qualquer condição de erro.
-    pub fn desliga_todos(&self) {
-        self.motor_c.escreve(DESLIGADO);
-        self.motor_a.escreve(DESLIGADO);
-        self.eletrobomba.escreve(DESLIGADO);
-        self.valvula_sabao.escreve(DESLIGADO);
-        self.valvula_amaciante.escreve(DESLIGADO);
-    }
-
-    pub fn motor_a(&self, ligar: bool) {
-        self.motor_a.escreve(if ligar { LIGADO } else { DESLIGADO });
-    }
-
-    pub fn motor_c(&self, ligar: bool) {
-        self.motor_c.escreve(if ligar { LIGADO } else { DESLIGADO });
-    }
-
-    pub fn eletrobomba(&self, ligar: bool) {
-        self.eletrobomba
-            .escreve(if ligar { LIGADO } else { DESLIGADO });
+    /// Válvula de amaciante. **Mesmo pino do atuador.**
+    pub fn valvula_amaciante(&self, abrir: bool) {
+        self.atuador.escreve(nivel(abrir));
     }
 
     pub fn valvula_sabao(&self, abrir: bool) {
-        self.valvula_sabao
-            .escreve(if abrir { LIGADO } else { DESLIGADO });
+        self.valvula_sabao.escreve(nivel(abrir));
     }
 
-    pub fn valvula_amaciante(&self, abrir: bool) {
-        self.valvula_amaciante
-            .escreve(if abrir { LIGADO } else { DESLIGADO });
+    pub fn motor_a(&self, ligar: bool) {
+        self.motor_a.escreve(nivel(ligar));
+    }
+
+    /// Motor em centrifugação. **Mesmo pino do `motor_pulse`.**
+    pub fn motor_c(&self, ligar: bool) {
+        self.motor_c.escreve(nivel(ligar));
+    }
+
+    /// Pulso de motor usado na drenagem e na centrifugação.
+    /// **Mesmo pino do `motor_c`.**
+    pub fn motor_pulse(&self, ligar: bool) {
+        self.motor_c.escreve(nivel(ligar));
+    }
+
+    /// Desliga todos os triacs. Chamada no boot, ao abrir a tampa, ao
+    /// desligar e em qualquer condição de erro.
+    ///
+    /// A válvula de amaciante NÃO aparece aqui porque divide o pino com
+    /// o atuador, que já é desligado na linha acima — é exatamente o
+    /// que o `desligaTodosTriacs()` do C++ faz.
+    pub fn desliga_todos_triacs(&self) {
+        self.motor_a(false);
+        self.motor_c(false);
+        self.bomba(false);
+        self.atuador(false);
+        self.valvula_sabao(false);
+    }
+
+    // ─── LEDs ────────────────────────────────────────────────────────────────
+
+    pub fn led_pause(&self, aceso: bool) {
+        self.led_pause.escreve(nivel(aceso));
+    }
+
+    pub fn led_mais_secas(&self, aceso: bool) {
+        self.led_mais_secas.escreve(nivel(aceso));
+    }
+
+    pub fn led_enxague_duplo(&self, aceso: bool) {
+        self.led_enxague_duplo.escreve(nivel(aceso));
+    }
+
+    /// Inverte o LED de ON/OFF — é o pisca de tampa aberta.
+    pub fn pisca_led(&self) {
+        self.led_pause.inverte();
+    }
+
+    /// Inverte os três LEDs ao mesmo tempo — animação de boot e de erro.
+    pub fn pisca_led_interface(&self) {
+        self.led_pause.inverte();
+        self.led_mais_secas.inverte();
+        self.led_enxague_duplo.inverte();
+    }
+
+    pub fn apaga_leds(&self) {
+        self.led_pause(false);
+        self.led_mais_secas(false);
+        self.led_enxague_duplo(false);
     }
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// ENTRADAS — botões e sensores
+// ENTRADAS — sensores, chave de modelo e encoder
 // ═════════════════════════════════════════════════════════════════════════════
 
 pub struct Entradas {
-    pub bt_on_off: Entrada,
-    pub bt_seletor: Entrada,
-    pub bt_nivel: Entrada,
-    pub bt_enxague_extra: Entrada,
-    pub bt_turbo: Entrada,
-    pub bt_amaciante: Entrada,
-    pub sensor_nivel_medio: Entrada,
-    pub sensor_nivel_alto: Entrada,
-    pub tampa: Entrada,
+    pressostato: Entrada,
+    tampa: Entrada,
+    tampa_mecanica: Entrada,
+    sw1: Entrada,
+    sw2: Entrada,
+    sw3: Entrada,
+    sw4: Entrada,
+    enc_1: Entrada,
+    enc_3: Entrada,
+    enc_4: Entrada,
+    enc_5: Entrada,
+    _botoes_ad: Analogico,
 }
 
 impl Entradas {
-    /// Botão pressionado = nível BAIXO (pull-up interno).
-    pub fn botao_pressionado(&self, b: crate::evento::Botao) -> bool {
-        use crate::evento::Botao::*;
-        match b {
-            OnOff => self.bt_on_off.esta_baixa(),
-            Seletor => self.bt_seletor.esta_baixa(),
-            Nivel => self.bt_nivel.esta_baixa(),
-            EnxagueExtra => self.bt_enxague_extra.esta_baixa(),
-            Turbo => self.bt_turbo.esta_baixa(),
-            Amaciante => self.bt_amaciante.esta_baixa(),
-        }
+    /// Leitura crua do pressostato. Nível ALTO = ainda não cheio.
+    ///
+    /// Quem usa isto é o filtro de 10 amostras em `tarefas::amostragem`,
+    /// que é também quem inverte o sinal para virar "nível de água
+    /// atingido" — igual ao `FiltroDebouncePressostato` do C++.
+    pub fn pressostato(&self) -> bool {
+        self.pressostato.esta_alta()
     }
 
-    /// Sensor de nível médio atingido (nível ALTO no pino).
-    pub fn nivel_medio_atingido(&self) -> bool {
-        self.sensor_nivel_medio.esta_alta()
-    }
-
-    /// Sensor de nível alto atingido.
-    pub fn nivel_alto_atingido(&self) -> bool {
-        self.sensor_nivel_alto.esta_alta()
-    }
-
-    /// Tampa aberta = nível ALTO no pino.
+    /// Tampa eletrônica (modelos 1–4 e 7). ALTO = aberta.
     pub fn tampa_aberta(&self) -> bool {
         self.tampa.esta_alta()
+    }
+
+    /// Tampa mecânica (modelos 5 e 6). ALTO = aberta.
+    pub fn tampa_mecanica_aberta(&self) -> bool {
+        self.tampa_mecanica.esta_alta()
+    }
+
+    /// Os quatro bits da chave de modelo, na ordem SW1..SW4.
+    pub fn chave_modelo(&self) -> [bool; 4] {
+        [
+            self.sw1.esta_alta(),
+            self.sw2.esta_alta(),
+            self.sw3.esta_alta(),
+            self.sw4.esta_alta(),
+        ]
+    }
+
+    /// As quatro trilhas do encoder, na ordem ENC_1, ENC_3, ENC_4, ENC_5
+    /// — a mesma ordem em que o C++ as passa para `setterEncoder`.
+    pub fn trilhas_encoder(&self) -> [bool; 4] {
+        [
+            self.enc_1.esta_alta(),
+            self.enc_3.esta_alta(),
+            self.enc_4.esta_alta(),
+            self.enc_5.esta_alta(),
+        ]
     }
 }
 
@@ -257,44 +251,37 @@ impl Entradas {
 // INICIALIZAÇÃO
 // ═════════════════════════════════════════════════════════════════════════════
 
-/// Liga o clock das portas, configura todos os pinos e devolve os três
-/// agrupamentos. Os triacs já saem daqui desligados.
-pub fn inicializa(rcu: &Rcu) -> (Painel, Atuadores, Entradas) {
+/// Liga o clock das portas, configura todos os pinos e devolve os dois
+/// agrupamentos. Os triacs e os LEDs já saem daqui desligados.
+pub fn inicializa(rcu: &Rcu) -> (Saidas, Entradas) {
     clock::habilita_gpio(rcu);
 
-    let painel = Painel {
-        pesada: Saida::nova(pino::LED_PESADA, DESLIGADO),
-        normal: Saida::nova(pino::LED_NORMAL, DESLIGADO),
-        rapido: Saida::nova(pino::LED_RAPIDO, DESLIGADO),
-        enxaguar: Saida::nova(pino::LED_ENXAGUAR, DESLIGADO),
-        centrifugar: Saida::nova(pino::LED_CENTRIFUGAR, DESLIGADO),
-        enxague_extra: Saida::nova(pino::LED_ENXAGUE_EXTRA, DESLIGADO),
-        turbo: Saida::nova(pino::LED_TURBO, DESLIGADO),
-        amaciante: Saida::nova(pino::LED_AMACIANTE, DESLIGADO),
-        nivel_medio: Saida::nova(pino::LED_NIVEL_MEDIO, DESLIGADO),
-        nivel_alto: Saida::nova(pino::LED_NIVEL_ALTO, DESLIGADO),
-    };
-
-    let atuadores = Atuadores {
+    let saidas = Saidas {
+        bomba: Saida::nova(pino::BOMBA, DESLIGADO),
+        atuador: Saida::nova(pino::ATUADOR, DESLIGADO),
         motor_c: Saida::nova(pino::MOTOR_C, DESLIGADO),
         motor_a: Saida::nova(pino::MOTOR_A, DESLIGADO),
-        eletrobomba: Saida::nova(pino::ELETROBOMBA, DESLIGADO),
         valvula_sabao: Saida::nova(pino::VALVULA_SABAO, DESLIGADO),
-        valvula_amaciante: Saida::nova(pino::VALVULA_AMACIANTE, DESLIGADO),
+        led_pause: Saida::nova(pino::LED_PAUSE, DESLIGADO),
+        led_mais_secas: Saida::nova(pino::LED_MAIS_SECAS, DESLIGADO),
+        led_enxague_duplo: Saida::nova(pino::LED_ENXAGUE_DUPLO, DESLIGADO),
     };
-    atuadores.desliga_todos();
+    saidas.desliga_todos_triacs();
 
     let entradas = Entradas {
-        bt_on_off: Entrada::nova(pino::BT_ON_OFF, Pull::Cima),
-        bt_seletor: Entrada::nova(pino::BT_SELETOR, Pull::Cima),
-        bt_nivel: Entrada::nova(pino::BT_NIVEL, Pull::Cima),
-        bt_enxague_extra: Entrada::nova(pino::BT_ENXAGUE_EXTRA, Pull::Cima),
-        bt_turbo: Entrada::nova(pino::BT_TURBO, Pull::Cima),
-        bt_amaciante: Entrada::nova(pino::BT_AMACIANTE, Pull::Cima),
-        sensor_nivel_medio: Entrada::nova(pino::SENSOR_NIVEL_MEDIO, Pull::Baixo),
-        sensor_nivel_alto: Entrada::nova(pino::SENSOR_NIVEL_ALTO, Pull::Baixo),
-        tampa: Entrada::nova(pino::TAMPA, Pull::Nenhum),
+        pressostato: Entrada::nova(pino::PRESSOSTATO, Pull::Nenhum),
+        tampa: Entrada::nova(pino::TAMPA, Pull::Cima),
+        tampa_mecanica: Entrada::nova(pino::TAMPA_MECANICA, Pull::Nenhum),
+        sw1: Entrada::nova(pino::SW1, Pull::Cima),
+        sw2: Entrada::nova(pino::SW2, Pull::Cima),
+        sw3: Entrada::nova(pino::SW3, Pull::Cima),
+        sw4: Entrada::nova(pino::SW4, Pull::Cima),
+        enc_1: Entrada::nova(pino::ENC_1, Pull::Baixo),
+        enc_3: Entrada::nova(pino::ENC_3, Pull::Baixo),
+        enc_4: Entrada::nova(pino::ENC_4, Pull::Baixo),
+        enc_5: Entrada::nova(pino::ENC_5, Pull::Baixo),
+        _botoes_ad: Analogico::novo(pino::BOTOES_AD),
     };
 
-    (painel, atuadores, entradas)
+    (saidas, entradas)
 }

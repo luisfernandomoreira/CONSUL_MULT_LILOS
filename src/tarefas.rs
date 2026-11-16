@@ -1,11 +1,16 @@
 //! =============================================================
-//! TAREFAS — as cinco rotinas concorrentes do lilos
+//! TAREFAS — as rotinas concorrentes do lilos
 //!
-//!   entradas  (10 ms) → lê botões e sensores, publica eventos
-//!   tempo     (50 ms) → publica Tique e, a cada 20, Segundo
-//!   maquina   (evento)→ consome a fila e decide o que fazer
-//!   gravacao  (pedido)→ grava o ciclo na flash, fora da máquina
-//!   watchdog  (1 s)   → alimenta o FWDGT
+//!   tempo      ( 1 s ) → conta os segundos do ciclo
+//!   agitacao   (21 ms) → move o contador do vai-e-vem do motor
+//!   tampa      (21 ms) → filtra os dois sensores de tampa
+//!   amostragem (81 ms) → encoder, botões (ADC) e pressostato
+//!   maquina    (sinal)→ executa a etapa atual do ciclo
+//!   gravacao   (pedido)→ grava o estado na flash
+//!   watchdog   ( 1 s ) → alimenta o FWDGT
+//!
+//! As quatro primeiras substituem os timers TIM14, TIM16 e TIM3 do
+//! firmware C++. A `maquina` substitui o `while(1)` do `main()`.
 //!
 //! Todas são `async fn -> Infallible`: nunca terminam, é o que o
 //! executor do lilos exige.
@@ -13,22 +18,66 @@
 
 use core::convert::Infallible;
 
-use lilos::time::{Millis, PeriodicGate};
+use lilos::time::{sleep_for, Millis, PeriodicGate};
 
-use crate::estado_salvo::{self, EstadoSalvo};
-use crate::evento::{publica, Botao, Evento};
-use crate::maquina::Maquina;
-use crate::mcu::pac::{Fmc, Fwdgt, Rcu};
-use crate::mcu::wdt;
-use crate::placa::{Atuadores, Entradas, Painel};
+use crate::encoder::{self, DetectorMudanca};
+use crate::estado_salvo;
+use crate::evento;
+use crate::leituras;
+use crate::maquina::{Etapa, Maquina};
+use crate::mcu::pac::{Adc, Fmc, Fwdgt, Rcu};
+use crate::mcu::{adc, wdt};
+use crate::modelo;
+use crate::placa::{Entradas, Saidas};
+use crate::relogio;
+use crate::agita;
 
 // ═════════════════════════════════════════════════════════════════════════════
-// FILTRO DE RUÍDO (debounce)
+// TAREFA: TEMPO — o relógio do ciclo
 // ═════════════════════════════════════════════════════════════════════════════
+
+/// Conta um segundo por vez. Equivale à interrupção do TIM14.
+pub async fn tempo() -> Infallible {
+    let mut gate = PeriodicGate::from(Millis(1_000));
+    loop {
+        gate.next_time().await;
+        relogio::atualiza();
+        evento::acorda();
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// TAREFA: AGITAÇÃO — a base de tempo do vai-e-vem
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// Move o contador da agitação a cada 21 ms (o TIM16 do C++).
+///
+/// É a tarefa mais rápida, então é ela que dá a cadência da máquina de
+/// estados: a cada tique a etapa atual é reavaliada.
+pub async fn agitacao() -> Infallible {
+    let mut gate = PeriodicGate::from(Millis(agita::PERIODO_MS));
+    loop {
+        gate.next_time().await;
+        agita::tique();
+        evento::acorda();
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// TAREFA: TAMPA — filtro dos dois sensores
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// Quantas leituras iguais seguidas confirmam a mudança da tampa.
+///
+/// ⚠ Aqui o porte **não** é literal. O C++ conta 250 leituras iguais
+/// do laço principal, que roda livre — o tempo real depende da
+/// velocidade do laço, algo na casa de 10 ms. Com amostragem fixa de
+/// 21 ms, duas leituras dão ~42 ms, mesma ordem de grandeza e com
+/// rejeição de ruído de chaveamento dos triacs. Vale conferir em
+/// bancada se 42 ms atende a abertura de tampa desta máquina.
+const LEITURAS_ESTAVEIS_TAMPA: u8 = 2;
 
 /// Só aceita uma mudança depois de `limite` leituras iguais seguidas.
-///
-/// Com amostragem de 10 ms: limite 5 = 50 ms, limite 20 = 200 ms.
 struct Debounce {
     estavel: bool,
     contador: u8,
@@ -36,7 +85,7 @@ struct Debounce {
 }
 
 impl Debounce {
-    const fn novo(inicial: bool, limite: u8) -> Self {
+    fn novo(inicial: bool, limite: u8) -> Self {
         Self {
             estavel: inicial,
             contador: 0,
@@ -44,114 +93,105 @@ impl Debounce {
         }
     }
 
-    /// Devolve `Some(novo_estado)` só no instante em que a mudança é aceita.
-    fn amostra(&mut self, leitura: bool) -> Option<bool> {
+    fn amostra(&mut self, leitura: bool) {
         if leitura == self.estavel {
             self.contador = 0;
-            return None;
+            return;
         }
         self.contador += 1;
-        if self.contador < self.limite {
-            return None;
-        }
-        self.contador = 0;
-        self.estavel = leitura;
-        Some(leitura)
-    }
-}
-
-// ═════════════════════════════════════════════════════════════════════════════
-// TAREFA: ENTRADAS
-// ═════════════════════════════════════════════════════════════════════════════
-
-/// Período de amostragem das entradas.
-const AMOSTRAGEM_MS: u64 = 10;
-/// 50 ms de estabilidade para aceitar um botão.
-const DEBOUNCE_BOTAO: u8 = 5;
-/// 200 ms de estabilidade para a tampa e os sensores de nível.
-const DEBOUNCE_SENSOR: u8 = 20;
-
-/// Varre botões e sensores e transforma cada mudança em um evento.
-///
-/// Note que NÃO usamos EXTI: amostrar a 10 ms já dá o debounce de graça
-/// e dispensa configurar NVIC, SYSCFG e linhas de interrupção. Menos
-/// hardware envolvido, menos coisa para dar errado.
-pub async fn entradas(e: &Entradas) -> Infallible {
-    let mut bt: [Debounce; 6] = core::array::from_fn(|i| {
-        Debounce::novo(e.botao_pressionado(Botao::TODOS[i]), DEBOUNCE_BOTAO)
-    });
-
-    let mut tampa = Debounce::novo(e.tampa_aberta(), DEBOUNCE_SENSOR);
-    let mut nivel_medio = Debounce::novo(e.nivel_medio_atingido(), DEBOUNCE_SENSOR);
-    let mut nivel_alto = Debounce::novo(e.nivel_alto_atingido(), DEBOUNCE_SENSOR);
-
-    // O combo do auto-teste é publicado uma vez só; rearma quando um dos
-    // dois botões é solto.
-    let mut combo_armado = true;
-
-    let mut relogio = PeriodicGate::from(Millis(AMOSTRAGEM_MS));
-
-    loop {
-        relogio.next_time().await;
-
-        // ── Botões ───────────────────────────────────────────────────────────
-        for &botao in Botao::TODOS.iter() {
-            let i = botao.indice();
-            if let Some(pressionado) = bt[i].amostra(e.botao_pressionado(botao)) {
-                publica(if pressionado {
-                    Evento::BotaoPressionado(botao)
-                } else {
-                    Evento::BotaoSolto(botao)
-                });
-            }
-        }
-
-        // ── Combinação Seletor + Nível (abre o auto-teste) ───────────────────
-        let combo = bt[Botao::Seletor.indice()].estavel && bt[Botao::Nivel.indice()].estavel;
-        if combo && combo_armado {
-            publica(Evento::ComboAutoTeste);
-            combo_armado = false;
-        } else if !combo {
-            combo_armado = true;
-        }
-
-        // ── Tampa e sensores de nível ────────────────────────────────────────
-        if let Some(aberta) = tampa.amostra(e.tampa_aberta()) {
-            publica(Evento::Tampa { aberta });
-        }
-        if let Some(atingido) = nivel_medio.amostra(e.nivel_medio_atingido()) {
-            publica(Evento::NivelMedio { atingido });
-        }
-        if let Some(atingido) = nivel_alto.amostra(e.nivel_alto_atingido()) {
-            publica(Evento::NivelAlto { atingido });
+        if self.contador >= self.limite {
+            self.contador = 0;
+            self.estavel = leitura;
         }
     }
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-// TAREFA: TEMPO
-// ═════════════════════════════════════════════════════════════════════════════
-
-/// Base de tempo do ciclo de agitação — 50 ms, igual ao firmware original.
-const TIQUE_MS: u64 = 50;
-const TIQUES_POR_SEGUNDO: u8 = (1_000 / TIQUE_MS) as u8;
-
-/// Publica `Tique` a cada 50 ms e `Segundo` a cada 20 tiques.
+/// Filtra os sensores de tampa eletrônico (PA4) e mecânico (PA7).
 ///
-/// Os dois saem da mesma base, então nunca ficam fora de fase.
-pub async fn tempo() -> Infallible {
-    let mut relogio = PeriodicGate::from(Millis(TIQUE_MS));
-    let mut contador: u8 = 0;
+/// Os dois são filtrados sempre; quem escolhe de qual sensor ler é a
+/// máquina, pelo modelo (ver `leituras::tampa_aberta`).
+pub async fn tampa(e: &Entradas) -> Infallible {
+    let mut eletronica = Debounce::novo(e.tampa_aberta(), LEITURAS_ESTAVEIS_TAMPA);
+    let mut mecanica = Debounce::novo(e.tampa_mecanica_aberta(), LEITURAS_ESTAVEIS_TAMPA);
 
+    let mut gate = PeriodicGate::from(Millis(agita::PERIODO_MS));
     loop {
-        relogio.next_time().await;
-        publica(Evento::Tique);
+        gate.next_time().await;
+        eletronica.amostra(e.tampa_aberta());
+        mecanica.amostra(e.tampa_mecanica_aberta());
+        leituras::set_tampas(eletronica.estavel, mecanica.estavel);
+    }
+}
 
-        contador += 1;
-        if contador >= TIQUES_POR_SEGUNDO {
-            contador = 0;
-            publica(Evento::Segundo);
+// ═════════════════════════════════════════════════════════════════════════════
+// TAREFA: AMOSTRAGEM — encoder, botões e pressostato
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// Período de amostragem, igual ao TIM3 do C++ (prescaler 24000 sobre
+/// 24 MHz dá 1 kHz, autoreload 80 → estouro em 81 contagens).
+pub const AMOSTRAGEM_MS: u64 = 81;
+
+/// Média móvel de 10 amostras do pressostato.
+///
+/// A água bate no tubo do pressostato e o contato oscila; sem o filtro,
+/// o ciclo pularia de etapa no meio da agitação. É o
+/// `FiltroDebouncePressostato` do C++.
+struct FiltroPressostato {
+    amostras: [bool; Self::N],
+    indice: usize,
+}
+
+impl FiltroPressostato {
+    const N: usize = 10;
+
+    fn novo(inicial: bool) -> Self {
+        Self {
+            amostras: [inicial; Self::N],
+            indice: 0,
         }
+    }
+
+    fn amostra(&mut self, leitura: bool) {
+        self.amostras[self.indice] = leitura;
+        self.indice += 1;
+        if self.indice == Self::N {
+            self.indice = 0;
+        }
+    }
+
+    /// A maioria das amostras está em nível alto?
+    fn maioria(&self) -> bool {
+        let soma: usize = self.amostras.iter().filter(|&&a| a).count();
+        soma > Self::N / 2
+    }
+}
+
+/// Lê o seletor, os botões e o pressostato a cada 81 ms.
+pub async fn amostragem(e: &Entradas, adc_periferico: &Adc) -> Infallible {
+    let mut detector = DetectorMudanca::novo(e.trilhas_encoder());
+    let mut pressostato = FiltroPressostato::novo(e.pressostato());
+
+    let mut gate = PeriodicGate::from(Millis(AMOSTRAGEM_MS));
+    loop {
+        gate.next_time().await;
+
+        // Girou o seletor? Guarda a posição nova; a máquina consome.
+        let trilhas = e.trilhas_encoder();
+        if detector.mudou(trilhas) {
+            leituras::marca_encoder(encoder::posicao(trilhas));
+        }
+
+        // Botões do painel, pelo divisor resistivo em PA6. Se o ADC não
+        // responder, mantém a última leitura boa.
+        if let Some(valor) = adc::converte(adc_periferico) {
+            leituras::set_ad(valor);
+        }
+
+        // Pressostato: filtra e inverte — nível baixo significa cheio.
+        pressostato.amostra(e.pressostato());
+        leituras::set_nivel_agua(!pressostato.maioria());
+
+        evento::acorda();
     }
 }
 
@@ -159,27 +199,40 @@ pub async fn tempo() -> Infallible {
 // TAREFA: MÁQUINA DE ESTADOS
 // ═════════════════════════════════════════════════════════════════════════════
 
-/// Consome a fila de eventos para sempre. É só isto:
-/// `evento → maquina.trata(evento)`.
+/// Animação de partida: pisca os três LEDs 4 vezes.
+const PISCADAS_BOOT: u8 = 4;
+const PISCA_BOOT_MS: u64 = 500;
+/// Espera para a chave de modelo e o encoder assentarem antes da
+/// primeira leitura.
+const ESPERA_BOOT_MS: u64 = 300;
+
+/// Executa o ciclo de lavagem: partida e depois uma passada por sinal.
 ///
-/// A animação de inicialização do painel NÃO está aqui: ela é o estado
-/// `Inicializando` da máquina, movido pelos mesmos `Tique`. Se esta
-/// tarefa parasse para animar, os eventos publicados nesse meio-tempo
-/// encheriam a fila e seriam descartados logo no boot.
-pub async fn maquina(
-    painel: &Painel,
-    at: &Atuadores,
-    entradas: &Entradas,
-    salvo: Option<EstadoSalvo>,
-) -> Infallible {
-    let mut maquina = Maquina::nova(painel, at, entradas);
-    if let Some(estado) = salvo {
-        maquina.restaura(estado);
+/// A partida é a mesma do `main()` do C++: espera, lê a chave de
+/// modelo, decide entre auto-teste e retomada do ciclo gravado, e
+/// pisca os LEDs.
+pub async fn maquina(s: &Saidas, e: &Entradas) -> Infallible {
+    let mut m = Maquina::nova(s, e);
+
+    sleep_for(Millis(ESPERA_BOOT_MS)).await;
+
+    // Chave na posição de auto-teste entra direto no teste de linha;
+    // caso contrário, retoma o ciclo que estava gravado na flash.
+    if modelo::do_chave(e.chave_modelo()) == modelo::AUTO_TESTE {
+        m.definir_etapa(Etapa::Teste);
+    } else {
+        m.seleciona_programa_inicial();
     }
 
+    for _ in 0..PISCADAS_BOOT {
+        s.pisca_led_interface();
+        sleep_for(Millis(PISCA_BOOT_MS)).await;
+    }
+    sleep_for(Millis(ESPERA_BOOT_MS)).await;
+
     loop {
-        let evento = crate::evento::proximo().await;
-        maquina.trata(evento);
+        evento::espera().await;
+        m.passo().await;
     }
 }
 
@@ -187,16 +240,16 @@ pub async fn maquina(
 // TAREFA: GRAVAÇÃO NA FLASH
 // ═════════════════════════════════════════════════════════════════════════════
 
-/// Grava o estado do ciclo na flash quando a máquina pede.
+/// Grava o estado do ciclo quando a máquina pede.
 ///
-/// Fica aqui, e não dentro da máquina de estados, porque gravar na flash
+/// Fica aqui, e não dentro da máquina, porque apagar e gravar a página
 /// trava o núcleo por alguns milissegundos. Nesta tarefa isso acontece
-/// entre dois eventos, sem atrasar a decisão da máquina.
+/// entre duas passadas, sem atrasar a decisão da etapa.
 pub async fn gravacao(fmc: &Fmc) -> Infallible {
     loop {
         let estado = estado_salvo::proximo_pedido().await;
         if !estado_salvo::grava(fmc, estado) {
-            lilos::time::sleep_for(Millis(100)).await;
+            sleep_for(Millis(100)).await;
             estado_salvo::repete_gravacao(estado);
         }
     }
@@ -206,15 +259,15 @@ pub async fn gravacao(fmc: &Fmc) -> Infallible {
 // TAREFA: WATCHDOG
 // ═════════════════════════════════════════════════════════════════════════════
 
-/// Alimenta o FWDGT a cada 1 s. O estouro é de 8 s: se qualquer tarefa
-/// travar, o executor para de rodar, esta tarefa para de alimentar e o
-/// MCU reinicia sozinho.
+/// Alimenta o FWDGT a cada 1 s. O estouro é de 2,8 s, o mesmo do IWDG
+/// no firmware C++: se qualquer tarefa travar, o executor para de
+/// rodar, esta tarefa para de alimentar e o MCU reinicia sozinho.
 pub async fn watchdog(wdt_periferico: &Fwdgt, rcu: &Rcu) -> Infallible {
-    wdt::inicia_8s(wdt_periferico, rcu).await;
-    let mut relogio = PeriodicGate::from(Millis(1_000));
+    wdt::inicia(wdt_periferico, rcu).await;
 
+    let mut gate = PeriodicGate::from(Millis(1_000));
     loop {
-        relogio.next_time().await;
+        gate.next_time().await;
         wdt::alimenta(wdt_periferico);
     }
 }

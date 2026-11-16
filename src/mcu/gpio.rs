@@ -144,6 +144,22 @@ impl Saida {
             self.baixa()
         }
     }
+
+    /// Inverte o nivel do pino. Atomico (usa TG).
+    ///
+    /// Usado nos piscas de LED, onde o firmware C++ chama
+    /// `LL_GPIO_TogglePin`.
+    #[inline(always)]
+    pub fn inverte(&self) {
+        // SAFETY: TG e "escreve 1 para inverter"; os outros bits ficam em 0.
+        unsafe {
+            self.pino
+                .porta
+                .bloco()
+                .tg()
+                .write(|w| w.bits(self.pino.bit()))
+        };
+    }
 }
 
 // ─── Entrada digital ─────────────────────────────────────────────────────────
@@ -172,8 +188,38 @@ impl Entrada {
         self.pino.porta.bloco().istat().read().bits() & self.pino.bit() != 0
     }
 
+    /// Parte da API da camada MCU; a CONSUL MULT le tudo por `esta_alta`.
+    #[allow(dead_code)]
     #[inline(always)]
     pub fn esta_baixa(&self) -> bool {
         !self.esta_alta()
+    }
+}
+
+// ─── Entrada analógica ───────────────────────────────────────────────────────
+
+/// Pino em modo analógico, para o ADC ler.
+///
+/// Na CONSUL MULT é só o PA6, onde fica o divisor resistivo dos três
+/// botões do painel. Em modo analógico o Schmitt trigger de entrada é
+/// desligado, então o pino não aparece mais no `istat` — o valor sai
+/// pelo ADC (ver `mcu::adc`).
+pub struct Analogico {
+    _pino: Pino,
+}
+
+impl Analogico {
+    pub fn novo(pino: Pino) -> Self {
+        let g = pino.porta.bloco();
+        // SAFETY: valores dentro da largura dos campos, conforme o manual.
+        unsafe {
+            // Sem pull: um resistor interno falsearia o divisor do painel.
+            g.pud()
+                .modify(|r, w| w.bits(campo(r.bits(), pino.desloc2(), 2, 0b00)));
+            g.ctl()
+                .modify(|r, w| w.bits(campo(r.bits(), pino.desloc2(), 2, 0b11)));
+            // analógico
+        }
+        Self { _pino: pino }
     }
 }

@@ -1,22 +1,38 @@
 //! =============================================================
-//! Persistência do ciclo na flash — retomada após queda de energia
+//! Estado salvo na flash — retomar o ciclo depois da queda de luz
 //!
-//! Guarda `(programa, etapa, opções)` na última página de 1 KB da flash.
+//! A lavadora precisa voltar de onde parou quando a energia cai no
+//! meio do ciclo. O firmware C++ guarda quatro valores na página 15 da
+//! flash do STM32; aqui eles vão na ÚLTIMA página de 1 KB do
+//! GD32C231 (0x0800_FC00), que o `memory.x` reserva deixando o código
+//! em 63 KB.
 //!
-//! ─── Por que gravar em sequência ─────────────────────────────
-//! A página cabe 128 registros de 8 bytes. Em vez de apagar a página
-//! a cada gravação, escrevemos um registro novo no primeiro espaço
-//! livre e só apagamos quando a página enche. Resultado: 1 apagamento
-//! a cada 128 gravações — a flash dura ~128× mais.
+//! | Endereço      | Guarda                        |
+//! |---------------|-------------------------------|
+//! | 0x0800_FC00   | etapa do ciclo (0..5)         |
+//! | 0x0800_FC20   | roupas mais secas (0/1)       |
+//! | 0x0800_FC40   | enxágue duplo (0/1)           |
+//! | 0x0800_FC60   | pausa (0/1)                   |
 //!
-//! ─── Formato do registro (8 bytes = 1 double word) ───────────
-//!   palavra_baixa = MAGICO | programa<<8 | etapa<<16 | opcoes<<24
-//!   palavra_alta  = !palavra_baixa        (verificação)
+//! O espaçamento de 0x20 é o mesmo do C++ (`ADD_15`, `ADD_15_1`…),
+//! para a conferência lado a lado ficar fácil.
 //!
-//! Página apagada vale 0xFFFF_FFFF nas duas palavras, e
-//! !0xFFFF_FFFF = 0x0000_0000 ≠ 0xFFFF_FFFF — ou seja, um espaço
-//! em branco nunca passa por registro válido.
+//! ─── Por que isto mora numa tarefa ───────────────────────────
+//! Apagar e gravar uma página trava o núcleo por alguns
+//! milissegundos. O C++ faz isso dentro do laço principal; aqui a
+//! máquina de estados só **pede** a gravação (`pede_gravacao`), e a
+//! tarefa `tarefas::gravacao` executa entre dois eventos. A máquina
+//! nunca para para esperar a flash.
+//!
+//! ─── Flash virgem ───────────────────────────────────────────
+//! Numa placa nova a flash está em 0xFFFF_FFFF. O C++ lê esse valor
+//! direto, o que acende as três opções sozinhas; aqui tratamos
+//! "apagado" como "não há estado salvo" e começamos limpo.
 //! =============================================================
+
+// A tabela de enderecos abaixo escreve `BASE + 0x00` de proposito: a
+// lista fica alinhada com a do firmware C++ e e mais facil de conferir.
+#![allow(clippy::identity_op)]
 
 use core::cell::Cell;
 use critical_section::Mutex;
@@ -24,113 +40,75 @@ use lilos::exec::Notify;
 
 use crate::mcu::flash;
 use crate::mcu::pac::Fmc;
-use crate::opcoes::Opcoes;
-use crate::programa::Programa;
 
-/// Última página da flash de 64 KB (página 63).
+/// Página reservada: a última das 64 páginas de 1 KB.
 const PAGINA: u8 = 63;
-const ENDERECO_BASE: u32 = flash::FLASH_INICIO + PAGINA as u32 * flash::TAMANHO_PAGINA;
-const TAMANHO_REGISTRO: u32 = 8;
-const REGISTROS_POR_PAGINA: u32 = flash::TAMANHO_PAGINA / TAMANHO_REGISTRO; // 128
+/// Endereço base da página reservada.
+const BASE: u32 = flash::FLASH_INICIO + (PAGINA as u32) * flash::TAMANHO_PAGINA;
 
-/// Marca que identifica um registro nosso.
-const MAGICO: u32 = 0xA5;
+const END_ETAPA: u32 = BASE + 0x00;
+const END_MAIS_SECAS: u32 = BASE + 0x20;
+const END_ENXAGUE_DUPLO: u32 = BASE + 0x40;
+const END_PAUSA: u32 = BASE + 0x60;
 
-/// O que é guardado entre uma energização e outra.
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// Valor de uma palavra apagada.
+const APAGADO: u32 = 0xFFFF_FFFF;
+
+/// O que é guardado entre uma queda de luz e a próxima partida.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct EstadoSalvo {
-    pub programa: Programa,
+    /// Etapa do ciclo: 0 encher, 1 agitar, 2 molho, 3 enxaguar,
+    /// 4 centrifugar, 5 desligado.
     pub etapa: u8,
-    pub opcoes: Opcoes,
-    pub ligado: bool,
-}
-
-impl EstadoSalvo {
-    fn em_palavra(&self) -> u32 {
-        MAGICO
-            | (self.programa.indice() as u32) << 8
-            | (self.etapa as u32) << 16
-            | ((self.opcoes.em_byte() | (u8::from(self.ligado) << 4)) as u32) << 24
-    }
-
-    fn de_palavra(p: u32) -> Self {
-        Self {
-            programa: Programa::de_indice(((p >> 8) & 0xFF) as u8),
-            etapa: ((p >> 16) & 0xFF) as u8,
-            opcoes: Opcoes::de_byte(((p >> 24) & 0xFF) as u8),
-            // O bit era zero nos registros anteriores, que ficam desligados.
-            ligado: p & (1 << 28) != 0,
-        }
-    }
+    pub mais_secas: bool,
+    pub enxague_duplo: bool,
+    pub pausa: bool,
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// LEITURA (no boot)
+// LEITURA
 // ═════════════════════════════════════════════════════════════════════════════
 
-/// Procura o último registro válido da página.
-///
-/// Devolve `None` na primeira energização (página em branco) ou se a
-/// página estiver corrompida.
+/// Lê o estado guardado. `None` se a página estiver virgem ou com
+/// valor fora do esperado.
 pub fn carrega() -> Option<EstadoSalvo> {
-    let mut encontrado = None;
+    let etapa = flash::le(END_ETAPA);
+    let mais_secas = flash::le(END_MAIS_SECAS);
+    let enxague_duplo = flash::le(END_ENXAGUE_DUPLO);
+    let pausa = flash::le(END_PAUSA);
 
-    for i in 0..REGISTROS_POR_PAGINA {
-        let endereco = ENDERECO_BASE + i * TAMANHO_REGISTRO;
-        let baixa = flash::le(endereco);
-        let alta = flash::le(endereco + 4);
-
-        if baixa == 0xFFFF_FFFF && alta == 0xFFFF_FFFF {
-            break; // espaço livre: daqui para frente não há mais nada
-        }
-        if alta == !baixa && (baixa & 0xFF) == MAGICO {
-            let estado = EstadoSalvo::de_palavra(baixa);
-            let indice_programa = ((baixa >> 8) & 0xFF) as u8;
-            if indice_programa < Programa::QUANTIDADE
-                && (estado.etapa as usize) < estado.programa.etapas().len()
-            {
-                encontrado = Some(estado);
-            }
-        }
+    if etapa == APAGADO || mais_secas == APAGADO || enxague_duplo == APAGADO || pausa == APAGADO {
+        return None;
+    }
+    if etapa > 5 {
+        return None;
     }
 
-    encontrado
-}
-
-/// Índice do primeiro registro livre, ou `None` se a página está cheia.
-fn primeiro_livre() -> Option<u32> {
-    (0..REGISTROS_POR_PAGINA).find(|i| {
-        let endereco = ENDERECO_BASE + i * TAMANHO_REGISTRO;
-        flash::le(endereco) == 0xFFFF_FFFF && flash::le(endereco + 4) == 0xFFFF_FFFF
+    Some(EstadoSalvo {
+        etapa: etapa as u8,
+        mais_secas: mais_secas != 0,
+        enxague_duplo: enxague_duplo != 0,
+        pausa: pausa != 0,
     })
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// GRAVAÇÃO (fora da máquina de estados)
+// PEDIDO DE GRAVAÇÃO
 // ═════════════════════════════════════════════════════════════════════════════
 
-/// Gravar na flash trava o núcleo por alguns milissegundos. A máquina de
-/// estados só deixa o pedido aqui; quem grava é a `tarefas::gravacao`.
+/// O pedido pendente. Só o mais recente importa: se a máquina mudar de
+/// etapa duas vezes antes da tarefa acordar, grava-se só o estado
+/// final.
 static PEDIDO: Mutex<Cell<Option<EstadoSalvo>>> = Mutex::new(Cell::new(None));
 static AVISO: Notify = Notify::new();
 
-/// Pede que o estado seja gravado. Retorna na hora — não grava nada aqui.
-///
-/// Se já houver um pedido pendente, ele é substituído: vale sempre o
-/// estado mais recente.
+/// A última gravação falhou? A máquina usa isto para acender o erro de
+/// interface, como o `falhaFlash` do C++.
+static FALHOU: Mutex<Cell<bool>> = Mutex::new(Cell::new(false));
+
+/// Pede para a tarefa de gravação salvar este estado.
 pub fn pede_gravacao(estado: EstadoSalvo) {
     critical_section::with(|cs| PEDIDO.borrow(cs).set(Some(estado)));
-    AVISO.notify();
-}
-
-/// Reagenda uma falha sem substituir um pedido mais recente da máquina.
-pub fn repete_gravacao(estado: EstadoSalvo) {
-    critical_section::with(|cs| {
-        let pedido = PEDIDO.borrow(cs);
-        if pedido.get().is_none() {
-            pedido.set(Some(estado));
-        }
-    });
     AVISO.notify();
 }
 
@@ -141,32 +119,62 @@ pub async fn proximo_pedido() -> EstadoSalvo {
         .await
 }
 
-/// Grava o estado de fato. Chamada só pela tarefa de gravação.
+/// Recoloca um pedido na fila — usado pela tarefa quando a gravação
+/// falha e vale tentar de novo.
+pub fn repete_gravacao(estado: EstadoSalvo) {
+    pede_gravacao(estado);
+}
+
+pub fn falhou() -> bool {
+    critical_section::with(|cs| FALHOU.borrow(cs).get())
+}
+
+fn marca_falha(falha: bool) {
+    critical_section::with(|cs| FALHOU.borrow(cs).set(falha));
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// GRAVAÇÃO
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// Grava o estado na flash. Devolve `false` se a FMC der erro ou se a
+/// conferência de leitura não bater.
 ///
-/// Devolve `false` se a FMC reportar erro — nesse caso o firmware segue
-/// funcionando normalmente, só perde a retomada.
+/// Se o que está gravado já é igual, não apaga nada — poupa a página,
+/// que tem vida útil limitada. É a mesma checagem do C++.
 pub fn grava(fmc: &Fmc, estado: EstadoSalvo) -> bool {
-    // Não regrava se o último registro já é exatamente este.
-    if carrega() == Some(estado) {
+    let etapa = estado.etapa as u32;
+    let mais_secas = estado.mais_secas as u32;
+    let enxague_duplo = estado.enxague_duplo as u32;
+    let pausa = estado.pausa as u32;
+
+    if flash::le(END_ETAPA) == etapa
+        && flash::le(END_MAIS_SECAS) == mais_secas
+        && flash::le(END_ENXAGUE_DUPLO) == enxague_duplo
+        && flash::le(END_PAUSA) == pausa
+    {
+        marca_falha(false);
         return true;
     }
 
-    let indice = match primeiro_livre() {
-        Some(i) => i,
-        None => {
-            // Página cheia: apaga e recomeça do zero.
-            if !flash::apaga_pagina(fmc, PAGINA) {
-                return false;
-            }
-            0
-        }
-    };
+    if !flash::apaga_pagina(fmc, PAGINA) {
+        marca_falha(true);
+        return false;
+    }
 
-    let palavra = estado.em_palavra();
-    flash::grava_double_word(
-        fmc,
-        ENDERECO_BASE + indice * TAMANHO_REGISTRO,
-        palavra,
-        !palavra,
-    )
+    // A FMC do GD32 grava de 8 em 8 bytes; a palavra alta fica em zero.
+    let mut ok = true;
+    ok &= flash::grava_double_word(fmc, END_ETAPA, etapa, 0);
+    ok &= flash::grava_double_word(fmc, END_MAIS_SECAS, mais_secas, 0);
+    ok &= flash::grava_double_word(fmc, END_ENXAGUE_DUPLO, enxague_duplo, 0);
+    ok &= flash::grava_double_word(fmc, END_PAUSA, pausa, 0);
+
+    // Confere relendo, igual ao C++.
+    ok &= flash::le(END_ETAPA) == etapa
+        && flash::le(END_MAIS_SECAS) == mais_secas
+        && flash::le(END_ENXAGUE_DUPLO) == enxague_duplo
+        && flash::le(END_PAUSA) == pausa;
+
+    marca_falha(!ok);
+    ok
 }
