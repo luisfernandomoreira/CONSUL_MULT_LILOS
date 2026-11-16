@@ -114,6 +114,38 @@ def main():
     for nome in sorted(mapa, key=lambda n: mapa[n]):
         print("  %-18s %s" % (nome, hex(mapa[nome])))
 
+    # Log circular das ultimas leituras do canal dos botoes.
+    TAM_LOG = 64
+    log = le(mapa["DIAG_LOG"], TAM_LOG)
+    pos = le(mapa["DIAG_LOG_POS"], 1)
+    pico = le(mapa["DIAG_PICO"], 1)
+
+    if log and pos:
+        p = pos[0] % TAM_LOG
+        ordenado = log[p:] + log[:p]   # do mais antigo para o mais recente
+        print("")
+        print("Ultimas %d leituras do canal dos botoes (antiga -> recente):" % TAM_LOG)
+        for i in range(0, TAM_LOG, 8):
+            print("  " + " ".join("%4d" % v for v in ordenado[i:i + 8]))
+
+        validos = [v for v in ordenado if v != 0]
+        if validos:
+            print("")
+            print("  menor: %d   maior: %d   espalhamento: %d"
+                  % (min(validos), max(validos), max(validos) - min(validos)))
+            vistas = sorted(set(f for f in (faixa_de(v) for v in validos) if f))
+            if vistas:
+                print("  faixas tocadas: %s" % ", ".join(vistas))
+            else:
+                print("  nenhuma leitura caiu numa faixa de botoes.rs")
+
+    if pico:
+        print("")
+        print("Maior valor fora do repouso: %d  (faixa: %s)"
+              % (pico[0], faixa_de(pico[0]) or "nenhuma"))
+        if pico[0] == 0:
+            print("  Nenhum aperto registrado ainda.")
+
     canais = le(mapa["DIAG_CANAIS"], NUM_CANAIS)
     minimos = le(mapa["DIAG_CANAIS_MIN"], NUM_CANAIS)
     maximos = le(mapa["DIAG_CANAIS_MAX"], NUM_CANAIS)
@@ -154,5 +186,17 @@ def main():
             print("ao aperto do botao, e com amplitude grande.")
 
 
+def como_ler():
+    print("")
+    print("Como ler o log acima:")
+    print("  - degraus estaveis, um por botao  -> divisor bom; ajuste as")
+    print("    faixas em src/botoes.rs para os valores vistos")
+    print("  - numeros pulando sem padrao, que mudam se voce encostar a mao")
+    print("    na placa          -> entrada FLUTUANDO. Confira a solda do PA6")
+    print("    e a continuidade dele ate o divisor resistivo")
+    print("  - tudo igual, sem reagir a nada -> o divisor nao chega ao pino")
+
+
 if __name__ == "__main__":
     main()
+    como_ler()

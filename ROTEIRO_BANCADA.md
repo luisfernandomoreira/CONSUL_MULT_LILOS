@@ -229,45 +229,65 @@ O diagnóstico resolve isso por medida: lê todos os canais e procura o
 que varia. Aperte e solte um botão do painel algumas vezes; o divisor
 resistivo mexe a tensão de **um canal só**, e é esse o certo.
 
-#### Como ler os LEDs
+#### Como ler o valor nos LEDs
+
+1. Grave, deixe a placa ligada e **não toque em nada**. Os três LEDs
+   piscam juntos, devagar: é o "aguardando um aperto".
+2. Aperte e solte **um** botão do painel.
+3. Os LEDs passam a soletrar, em decimal, o maior valor visto.
+
+Cada rodada começa com os **três LEDs acesos juntos** por meio segundo.
+Depois vêm três dígitos — centena, dezena, unidade —, separados por
+**um pisca do LED de mais secas**:
+
+```text
+  [três acesos]  8 piscas  [separador]  2 piscas  [separador]  0 piscas
+       início     centena                dezena                unidade
+  =>  820
+```
+
+Dígito zero é nenhum pisca entre dois separadores. Para o botão de
+ON/OFF, o valor esperado é entre **795 e 845**.
 
 | O que aparece | Significa |
 |---------------|-----------|
-| os três **apagados** | o ADC não está convertendo |
-| **luz correndo** nos três | converte, mas nenhum canal variou — aperte um botão |
-| **1 pisca** do LED de mais secas, depois **N piscas** do LED de ON/OFF | o canal é **N** |
+| três LEDs **piscando juntos**, nunca soletra | nenhuma leitura saiu da faixa de repouso |
+| três LEDs **apagados** | o ADC não está convertendo |
+| soletra um número **estável** entre apertos | o divisor está bom — ajuste a faixa em [botoes.rs](src/botoes.rs) |
+| soletra número **diferente a cada aperto** | **entrada flutuando** — veja abaixo |
 
-O pisca do LED de mais secas marca o início da contagem. Se depois
-dele não vier pisca nenhum, o canal é **0**.
+#### Entrada flutuando
 
-Achado o número, ajuste `CANAL_BOTOES` em [mcu/adc.rs](src/mcu/adc.rs).
+Se o número muda a cada aperto, ou se **encostar a mão na placa altera
+o comportamento**, a entrada analógica está solta: o divisor resistivo
+não está fixando a tensão no pino, e a capacitância do corpo chega a
+mover a leitura para dentro da faixa de um botão.
 
-#### Os números exatos, pelo SWD
+Isso não se conserta no firmware. Nesta ordem:
 
-Se quiser a tabela com os valores de todos os canais:
+1. **Solda do PA6.** Se o microcontrolador acabou de ser trocado, é o
+   primeiro lugar. Reflua o pino e confira com lupa.
+2. **Continuidade** do pino PA6 do MCU até o divisor resistivo e até o
+   conector do painel.
+3. **Tensão no PA6** com o multímetro, soltando e apertando cada botão.
+   Tem de haver um patamar estável por botão. Se não houver tensão
+   definida no pino, o problema é na placa.
+
+#### O log das últimas 64 leituras
+
+Para ver a sequência de valores em volta de um aperto:
 
 ```bash
 python -I ferramentas/le_adc.py
 ```
 
-Ele compila, levanta os endereços no ELF e chama o `probe-rs` sozinho.
-Mostra, por canal, o valor atual, o mínimo, o máximo, a variação e em
-que faixa de [botoes.rs](src/botoes.rs) o valor cai.
-
-Para essa leitura use o build **dev**, que mantém os símbolos (o
-release os apaga e os endereços mudam):
+Ele despeja o log circular (`DIAG_LOG`), o maior valor fora do repouso,
+o espalhamento e quais faixas de [botoes.rs](src/botoes.rs) foram
+tocadas — e termina dizendo como interpretar. Use o build **dev**, que
+mantém os símbolos:
 
 ```bash
 cargo run --features diag-botoes
-```
-
-O dev tem a mesma otimização do release — `opt-level = "z"` e LTO —, só
-guarda os símbolos.
-
-Depois volte ao build normal:
-
-```bash
-cargo run --release
 ```
 
 #### Se nenhum canal variar

@@ -281,7 +281,7 @@ pub async fn watchdog(wdt_periferico: &Fwdgt, rcu: &Rcu) -> Infallible {
 // TAREFA: DIAGNOSTICO DOS BOTOES (build de bancada)
 // ═════════════════════════════════════════════════════════════════════════════
 
-/// Varre os 16 canais do ADC e pisca o numero daquele que se move.
+/// Pisca nos LEDs o VALOR que o ADC leu quando um botao foi apertado.
 ///
 /// Entra no lugar da maquina de estados quando o firmware e compilado
 /// com a feature `diag-botoes`:
@@ -290,61 +290,66 @@ pub async fn watchdog(wdt_periferico: &Fwdgt, rcu: &Rcu) -> Infallible {
 /// cargo run --release --features diag-botoes
 /// ```
 ///
-/// Os triacs ficam desligados o tempo todo — da para rodar com a placa
-/// na bancada, sem agua e sem carga. O watchdog tambem fica de fora
-/// neste build, para o `probe-rs` poder parar o nucleo sem resetar a
-/// placa.
+/// Os triacs ficam desligados o tempo todo — da para rodar sem agua e
+/// sem carga. O watchdog tambem fica de fora, para o `probe-rs` poder
+/// parar o nucleo sem resetar a placa.
 ///
-/// ─── Para que serve ──────────────────────────────────────────
+/// ─── Como usar ───────────────────────────────────────────────
 ///
-/// O numero do canal do ADC ligado ao PA6 veio do `ADC1_IN6` do
-/// STM32C031, nao do manual do GD32C231. Se o canal estiver errado, o
-/// firmware le um pino que nao e o do painel — e o valor fica parado,
-/// porque nada mexe nele.
+/// 1. Grave, deixe a placa ligada e **nao toque em nada**. Os tres
+///    LEDs piscam juntos, devagar: e o "aguardando um aperto".
+/// 2. Aperte e solte **um** botao do painel.
+/// 3. Os LEDs passam a soletrar o maior valor visto, em decimal.
 ///
-/// Esta tarefa resolve isso por medida, nao por suposicao: le **todos**
-/// os canais e procura o que varia. Aperte e solte um botao do painel
-/// algumas vezes; o divisor resistivo mexe a tensao de **um canal so**,
-/// e e esse o certo.
+/// ─── Como ler o numero ───────────────────────────────────────
 ///
-/// ─── Como ler os LEDs ────────────────────────────────────────
+/// Cada rodada comeca com os **tres LEDs acesos juntos** por meio
+/// segundo. Depois vem tres digitos — centena, dezena, unidade —, cada
+/// um separado por **um pisca do LED de mais secas**:
+///
+/// ```text
+///   [tres acesos]  8 piscas  [separador]  2 piscas  [separador]  0 piscas
+///        inicio     centena                dezena                unidade
+///   =>  820
+/// ```
+///
+/// Digito zero e nenhum pisca entre dois separadores. O valor esperado
+/// para o botao de ON/OFF e algo entre **795 e 845**.
+///
+/// ─── O que o numero diz ──────────────────────────────────────
 ///
 /// | O que aparece | Significa |
 /// |---|---|
-/// | os tres **apagados** | o ADC nao esta convertendo |
-/// | **luz correndo** nos tres | converte, mas nenhum canal variou — aperte um botao |
-/// | **1 pisca** do LED de mais secas, depois N piscas do LED de ON/OFF | o canal e **N** |
+/// | tres LEDs **piscando juntos**, nunca soletra | nenhuma leitura saiu da faixa de repouso |
+/// | tres LEDs **apagados** | o ADC nao esta convertendo |
+/// | soletra um numero **estavel** entre apertos | o divisor esta bom; e so ajustar a faixa em `botoes.rs` |
+/// | soletra numero **diferente a cada aperto** | entrada flutuando — confira a solda do PA6 e a continuidade ate o divisor |
 ///
-/// O pisca do LED de mais secas marca o inicio da contagem. Se depois
-/// dele nao vier pisca nenhum, o canal e **0**.
-///
-/// Achado o numero, corrija `CANAL_BOTOES` em [`crate::mcu::adc`].
+/// O log completo das ultimas 64 leituras fica em `DIAG_LOG`; o script
+/// `ferramentas/le_adc.py` despeja a sequencia.
 #[cfg(feature = "diag-botoes")]
 pub async fn diagnostico_botoes(s: &Saidas, adc_periferico: &Adc) -> Infallible {
-    /// Variacao minima para considerar que um canal se mexeu. O ruido
-    /// de um canal parado fica bem abaixo disto.
-    const VARIACAO_MINIMA: u16 = 20;
-
     const PASSO_MS: u64 = 100;
-    /// Duracao do pisca marcador, em passos.
-    const MARCADOR: u32 = 3;
-    /// Pausa depois do marcador, em passos.
-    const APOS_MARCADOR: u32 = 3;
-    /// Cada pisca da contagem: 2 passos aceso, 2 apagados.
-    const POR_PISCA: u32 = 4;
-    /// Pausa entre rodadas, em passos.
-    const ENTRE_RODADAS: u32 = 12;
     /// Passos sem o contador de conversoes andar para declarar o ADC
     /// parado (~1 s).
     const PACIENCIA: u8 = 10;
+
+    // Ritmo da soletracao, em passos de PASSO_MS.
+    const INICIO: u32 = 5; // tres LEDs acesos
+    const APOS_INICIO: u32 = 3;
+    const POR_PISCA: u32 = 4; // 2 acesos, 2 apagados
+    const SEPARADOR: u32 = 3; // pisca do LED de mais secas
+    const APOS_SEPARADOR: u32 = 2;
+    const ENTRE_RODADAS: u32 = 15;
 
     s.desliga_todos_triacs();
     s.apaga_leds();
 
     let mut passo: u32 = 0;
-    let mut canal_mostrado: Option<usize> = None;
+    let mut valor_mostrado: u16 = 0;
     let mut ultimo_ok = diag::conversoes_ok();
     let mut paradas: u8 = 0;
+    let mut varredura: u8 = 0;
 
     let mut gate = PeriodicGate::from(Millis(PASSO_MS));
     loop {
@@ -353,20 +358,29 @@ pub async fn diagnostico_botoes(s: &Saidas, adc_periferico: &Adc) -> Infallible 
         // Os triacs nunca ligam neste modo.
         s.desliga_todos_triacs();
 
-        // Varre todos os canais em cada passo, para pegar o aperto do
-        // botao mesmo no meio de uma contagem.
-        for canal in 0..adc::NUM_CANAIS {
-            match adc::converte_canal(adc_periferico, canal) {
-                Some(valor) => {
+        // ── Le o canal dos botoes e guarda no log ──
+        match adc::converte_canal(adc_periferico, adc::CANAL_BOTOES) {
+            Some(valor) => {
+                diag::registra_leitura(valor);
+                diag::registra_log(valor);
+                leituras::set_ad(valor);
+            }
+            None => diag::registra_falha(),
+        }
+
+        // Uma vez por segundo, varre os outros canais para o script
+        // poder comparar — ajuda quando a suspeita volta a ser o canal.
+        varredura = varredura.wrapping_add(1);
+        if varredura >= 10 {
+            varredura = 0;
+            for canal in 0..adc::NUM_CANAIS {
+                if let Some(valor) = adc::converte_canal(adc_periferico, canal) {
                     diag::registra_canal(canal as usize, valor);
-                    diag::registra_leitura(valor);
                 }
-                None => diag::registra_falha(),
             }
         }
 
-        // O ADC esta convertendo? Sem este teste, "nenhum canal varia"
-        // e "nada converte" dariam o mesmo padrao nos LEDs.
+        // ── O ADC esta convertendo? ──
         let ok = diag::conversoes_ok();
         if ok == ultimo_ok {
             paradas = paradas.saturating_add(1);
@@ -379,51 +393,73 @@ pub async fn diagnostico_botoes(s: &Saidas, adc_periferico: &Adc) -> Infallible 
             continue;
         }
 
-        let achado = diag::canal_mais_ativo(VARIACAO_MINIMA);
+        // ── Ja houve algum aperto? ──
+        let pico = diag::pico();
+        if pico == 0 {
+            // Nada fora do repouso ainda: pisca os tres, devagar.
+            s.led_pause(passo % 10 < 5);
+            s.led_mais_secas(passo % 10 < 5);
+            s.led_enxague_duplo(passo % 10 < 5);
+            passo = passo.wrapping_add(1);
+            continue;
+        }
 
-        // Trocou o canal mais ativo? Recomeca a contagem do zero, para
-        // ninguem contar piscas de duas rodadas diferentes.
-        if achado != canal_mostrado {
-            canal_mostrado = achado;
+        // Valor novo? Recomeca a soletracao do zero.
+        if pico != valor_mostrado {
+            valor_mostrado = pico;
             passo = 0;
         }
 
-        let Some(canal) = canal_mostrado else {
-            // Nenhum canal variou: luz correndo, pedindo um aperto.
-            let fase = (passo / 2) % 3;
-            s.led_pause(fase == 0);
-            s.led_mais_secas(fase == 1);
-            s.led_enxague_duplo(fase == 2);
-            passo = passo.wrapping_add(1);
-            continue;
-        };
+        // ── Soletra o numero ──
+        let centena = (valor_mostrado / 100 % 10) as u32;
+        let dezena = (valor_mostrado / 10 % 10) as u32;
+        let unidade = (valor_mostrado % 10) as u32;
 
-        // Sequencia: marcador, pausa, N piscas, pausa longa.
-        let piscas = canal as u32;
-        let fim_marcador = MARCADOR;
-        let fim_pausa = fim_marcador + APOS_MARCADOR;
-        let fim_contagem = fim_pausa + piscas * POR_PISCA;
-        let total = fim_contagem + ENTRE_RODADAS;
+        // Marcos da sequencia, em passos.
+        let m_inicio = INICIO;
+        let m_apos_inicio = m_inicio + APOS_INICIO;
+        let m_centena = m_apos_inicio + centena * POR_PISCA;
+        let m_sep1 = m_centena + SEPARADOR;
+        let m_apos_sep1 = m_sep1 + APOS_SEPARADOR;
+        let m_dezena = m_apos_sep1 + dezena * POR_PISCA;
+        let m_sep2 = m_dezena + SEPARADOR;
+        let m_apos_sep2 = m_sep2 + APOS_SEPARADOR;
+        let m_unidade = m_apos_sep2 + unidade * POR_PISCA;
+        let total = m_unidade + ENTRE_RODADAS;
 
         let p = passo % total;
+        passo = passo.wrapping_add(1);
 
-        s.led_enxague_duplo(false);
-        if p < fim_marcador {
-            // Marcador: o LED de mais secas.
-            s.led_mais_secas(true);
-            s.led_pause(false);
-        } else if p < fim_pausa {
-            s.led_mais_secas(false);
-            s.led_pause(false);
-        } else if p < fim_contagem {
-            // Contagem no LED de ON/OFF.
-            s.led_mais_secas(false);
-            s.led_pause((p - fim_pausa) % POR_PISCA < 2);
-        } else {
-            s.led_mais_secas(false);
-            s.led_pause(false);
+        // Por omissao, tudo apagado.
+        let mut pause = false;
+        let mut secas = false;
+        let mut duplo = false;
+
+        if p < m_inicio {
+            // Inicio da rodada: os tres juntos.
+            pause = true;
+            secas = true;
+            duplo = true;
+        } else if p < m_apos_inicio {
+            // pausa
+        } else if p < m_centena {
+            pause = (p - m_apos_inicio) % POR_PISCA < 2;
+        } else if p < m_sep1 {
+            secas = true;
+        } else if p < m_apos_sep1 {
+            // pausa
+        } else if p < m_dezena {
+            pause = (p - m_apos_sep1) % POR_PISCA < 2;
+        } else if p < m_sep2 {
+            secas = true;
+        } else if p < m_apos_sep2 {
+            // pausa
+        } else if p < m_unidade {
+            pause = (p - m_apos_sep2) % POR_PISCA < 2;
         }
 
-        passo = passo.wrapping_add(1);
+        s.led_pause(pause);
+        s.led_mais_secas(secas);
+        s.led_enxague_duplo(duplo);
     }
 }

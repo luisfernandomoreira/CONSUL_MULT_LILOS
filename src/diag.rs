@@ -200,3 +200,57 @@ pub fn canal_mais_ativo(variacao_minima: u16) -> Option<usize> {
 
     melhor.map(|(canal, _)| canal)
 }
+
+// ═════════════════════════════════════════════════════════════════════════════
+// LOG CIRCULAR DAS LEITURAS (build de bancada)
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// Quantas leituras o log guarda.
+pub const TAM_LOG: usize = 64;
+
+/// As ultimas leituras do canal dos botoes, em ordem circular.
+///
+/// Aperte um botao e despeje isto: a sequencia mostra o valor antes,
+/// durante e depois do aperto. E o "log" que falta numa placa sem
+/// UART e sem display.
+#[no_mangle]
+pub static mut DIAG_LOG: [u16; TAM_LOG] = [0; TAM_LOG];
+
+/// Onde a proxima leitura vai entrar no log (0..TAM_LOG-1).
+#[no_mangle]
+pub static mut DIAG_LOG_POS: u16 = 0;
+
+/// Maior leitura vista FORA da faixa de repouso.
+///
+/// Com o painel em repouso o valor fica na faixa baixa; qualquer coisa
+/// acima dela e aperto de botao (ou ruido). Este e o numero que o
+/// diagnostico pisca nos LEDs.
+#[no_mangle]
+pub static mut DIAG_PICO: u16 = 0;
+
+/// Guarda uma leitura no log circular.
+#[cfg(feature = "diag-botoes")]
+pub fn registra_log(valor: u16) {
+    // SAFETY: escritas volateis em `static mut` que so a tarefa de
+    // diagnostico escreve, com indice sempre dentro do vetor.
+    unsafe {
+        let pos = core::ptr::read_volatile(addr_of_mut!(DIAG_LOG_POS)) as usize % TAM_LOG;
+        let base = addr_of_mut!(DIAG_LOG) as *mut u16;
+        core::ptr::write_volatile(base.add(pos), valor);
+        core::ptr::write_volatile(addr_of_mut!(DIAG_LOG_POS), ((pos + 1) % TAM_LOG) as u16);
+
+        if !crate::botoes::em_repouso(valor) {
+            let pico = core::ptr::read_volatile(addr_of_mut!(DIAG_PICO));
+            if valor > pico {
+                core::ptr::write_volatile(addr_of_mut!(DIAG_PICO), valor);
+            }
+        }
+    }
+}
+
+/// O maior valor visto fora da faixa de repouso.
+#[cfg(feature = "diag-botoes")]
+pub fn pico() -> u16 {
+    // SAFETY: leitura volatil de um `static mut`.
+    unsafe { core::ptr::read_volatile(addr_of_mut!(DIAG_PICO)) }
+}

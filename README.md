@@ -900,17 +900,17 @@ Cerca de **28% dos 63 KB** de flash disponíveis.
 
 ### Build de bancada para os botões
 
-Se os botões do painel não responderem, há um build que **varre os 16
-canais do ADC e pisca o número daquele que se move** quando um botão é
-apertado — sem osciloscópio e sem debugger:
+Se os botões do painel não responderem, há um build que **soletra nos
+três LEDs, em decimal, o valor que o ADC leu no aperto** — sem
+osciloscópio e sem debugger:
 
 ```bash
 cargo run --release --features diag-botoes
 ```
 
-Os triacs e o watchdog ficam de fora. Para os números exatos de todos
-os canais, `python -I ferramentas/le_adc.py` lê a placa por SWD e
-mostra uma tabela. Os detalhes estão em [src/diag.rs](src/diag.rs) e no
+Os triacs e o watchdog ficam de fora. Para o log das últimas 64
+leituras e a tabela dos 16 canais, `python -I ferramentas/le_adc.py` lê
+a placa por SWD. Os detalhes estão em [src/diag.rs](src/diag.rs) e no
 [Roteiro de bancada](ROTEIRO_BANCADA.md#modo-de-diagnóstico-dos-botões).
 
 ---
