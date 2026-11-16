@@ -734,8 +734,14 @@ como esperada: mostra as duas escalas lado a lado e confere o que
 precisa valer — faixas sem sobreposição, largura igual à do C++ e o
 mesmo deslocamento nas três.
 
-Sobrou um ponto aberto, que não é do ADC:
+Ficaram dois pontos a confirmar em bancada:
 
+* **A faixa do Enxágue Duplo nunca foi medida.** Só a de Pausa foi
+  (789). As de Mais Secas e Enxágue Duplo vêm do mesmo deslocamento de
+  −31 — a de Mais Secas já se mostrou boa na prática, a de Enxágue
+  Duplo ainda não foi exercitada. Para medir: build de bancada, segurar
+  cada botão ~1 s e rodar `python -I ferramentas/le_adc.py`, que lista
+  os patamares e diz em que faixa cada um cai.
 * **Debounce da tampa** — item 3 da tabela acima: 2 leituras de 21 ms
   (~42 ms) no lugar das ~250 leituras do laço livre do C++. Vale
   conferir se atende a abertura de tampa desta máquina.
