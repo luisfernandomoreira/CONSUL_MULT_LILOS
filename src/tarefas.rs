@@ -281,7 +281,7 @@ pub async fn watchdog(wdt_periferico: &Fwdgt, rcu: &Rcu) -> Infallible {
 // TAREFA: DIAGNOSTICO DOS BOTOES (build de bancada)
 // ═════════════════════════════════════════════════════════════════════════════
 
-/// Mostra nos tres LEDs o que o ADC dos botoes esta lendo.
+/// Descobre em que ESCALA o ADC esta lendo e mostra nos tres LEDs.
 ///
 /// Entra no lugar da maquina de estados quando o firmware e compilado
 /// com a feature `diag-botoes`:
@@ -293,35 +293,59 @@ pub async fn watchdog(wdt_periferico: &Fwdgt, rcu: &Rcu) -> Infallible {
 /// Os triacs ficam desligados o tempo todo — da para rodar com a placa
 /// na bancada, sem agua e sem carga.
 ///
+/// ─── Como ler ────────────────────────────────────────────────
+///
+/// **Segure o botao de ON/OFF** enquanto olha os LEDs. As faixas dos
+/// botoes sao estreitas (795..845, por exemplo), entao com um botao
+/// apertado so uma escala casa — nao da empate. Em repouso a faixa e
+/// larga e duas escalas podem casar ao mesmo tempo.
+///
 /// | Padrao dos LEDs | Significa |
 /// |---|---|
-/// | todos apagados | repouso (7..60) — o ADC esta bom |
-/// | so o LED de ON/OFF aceso | botao **Pausa** reconhecido |
-/// | so o LED de mais secas aceso | botao **Mais Secas** reconhecido |
-/// | so o LED de enxague duplo aceso | botao **Enxague Duplo** reconhecido |
-/// | os tres piscando juntos | valor **fora de todas as faixas** |
-/// | o LED de ON/OFF piscando sozinho | o ADC **nao esta convertendo** |
+/// | ON/OFF aceso **fixo** | escala ÷1 — o ADC esta como o firmware espera |
+/// | mais secas aceso **fixo** | escala ÷2 — esta lendo 11 bits |
+/// | enxague duplo aceso **fixo** | escala ÷4 — esta lendo **12 bits** |
+/// | ON/OFF + mais secas **fixos** | escala ÷8 |
+/// | os tres **piscando juntos** | nenhuma escala casa, mas o valor varia |
+/// | **luz correndo** nos tres | o valor nao muda desde a partida |
+/// | os tres **apagados** | o ADC nao esta convertendo |
 ///
-/// Os dois ultimos sao os casos de defeito, e sao bem diferentes:
-/// "fora das faixas" quer dizer que o ADC le, mas o numero nao cai em
-/// nenhuma janela de `botoes.rs` (resolucao ou divisor); "nao esta
-/// convertendo" quer dizer que a conversao nem termina (canal, clock
-/// ou habilitacao do periferico).
+/// As quatro primeiras linhas sao diagnostico fechado: a correcao e no
+/// `DRES` de [`crate::mcu::adc`], ou dividir o resultado por essa
+/// escala. As tres ultimas sao defeito de outra natureza — valor
+/// travado, canal errado ou periferico sem converter.
 #[cfg(feature = "diag-botoes")]
 pub async fn diagnostico_botoes(s: &Saidas) -> Infallible {
-    use crate::botoes::Botao;
+    /// Escalas testadas, da mais provavel para a menos.
+    const ESCALAS: [u16; 4] = [1, 2, 4, 8];
 
-    const PERIODO_MS: u64 = 100;
-    /// Quantas passadas sem o contador de conversoes andar para
-    /// declarar o ADC parado (~1 s).
+    const PERIODO_MS: u64 = 120;
+    /// Passadas sem o contador de conversoes andar para declarar o ADC
+    /// parado (~1,2 s).
     const PACIENCIA: u8 = 10;
+    /// Abaixo desta variacao total, o valor e considerado travado.
+    const AMPLITUDE_MINIMA: u16 = 10;
+
+    /// Em que escala o valor cai numa faixa conhecida.
+    ///
+    /// Tenta primeiro as faixas dos botoes, que sao estreitas e nao
+    /// dao empate; so depois o repouso, que e largo.
+    fn escala(ad: u16) -> Option<u16> {
+        if let Some(d) = ESCALAS
+            .into_iter()
+            .find(|&d| crate::botoes::identifica(ad / d).is_some())
+        {
+            return Some(d);
+        }
+        ESCALAS.into_iter().find(|&d| crate::botoes::em_repouso(ad / d))
+    }
 
     s.desliga_todos_triacs();
     s.apaga_leds();
 
     let mut ultimo_ok = diag::conversoes_ok();
     let mut paradas: u8 = 0;
-    let mut pisca = false;
+    let mut fase: u8 = 0;
 
     let mut gate = PeriodicGate::from(Millis(PERIODO_MS));
     loop {
@@ -329,9 +353,10 @@ pub async fn diagnostico_botoes(s: &Saidas) -> Infallible {
 
         // Os triacs nunca ligam neste modo.
         s.desliga_todos_triacs();
-        pisca = !pisca;
+        fase = (fase + 1) % 4;
+        let pisca = fase < 2;
 
-        // O ADC esta convertendo?
+        // ── O ADC esta convertendo? ──
         let ok = diag::conversoes_ok();
         if ok == ultimo_ok {
             paradas = paradas.saturating_add(1);
@@ -339,39 +364,43 @@ pub async fn diagnostico_botoes(s: &Saidas) -> Infallible {
             paradas = 0;
             ultimo_ok = ok;
         }
-
         if paradas >= PACIENCIA {
-            // ADC parado: so o LED de ON/OFF pisca.
-            s.led_pause(pisca);
-            s.led_mais_secas(false);
-            s.led_enxague_duplo(false);
-            continue;
-        }
-
-        let ad = leituras::ad();
-
-        if crate::botoes::em_repouso(ad) {
             s.apaga_leds();
             continue;
         }
 
-        match crate::botoes::identifica(ad) {
-            Some(Botao::Pause) => {
+        // ── O valor se move? ──
+        if diag::amplitude() < AMPLITUDE_MINIMA {
+            // Luz correndo: valor travado desde a partida.
+            s.led_pause(fase == 0);
+            s.led_mais_secas(fase == 1);
+            s.led_enxague_duplo(fase == 2);
+            continue;
+        }
+
+        // ── Em que escala o ADC esta lendo? ──
+        match escala(leituras::ad()) {
+            Some(1) => {
                 s.led_pause(true);
                 s.led_mais_secas(false);
                 s.led_enxague_duplo(false);
             }
-            Some(Botao::MaisSecas) => {
+            Some(2) => {
                 s.led_pause(false);
                 s.led_mais_secas(true);
                 s.led_enxague_duplo(false);
             }
-            Some(Botao::EnxagueDuplo) => {
+            Some(4) => {
                 s.led_pause(false);
                 s.led_mais_secas(false);
                 s.led_enxague_duplo(true);
             }
-            // Fora de todas as faixas: os tres piscam juntos.
+            Some(_) => {
+                s.led_pause(true);
+                s.led_mais_secas(true);
+                s.led_enxague_duplo(false);
+            }
+            // Nenhuma escala casa, mas o valor varia.
             None => {
                 s.led_pause(pisca);
                 s.led_mais_secas(pisca);

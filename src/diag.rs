@@ -112,3 +112,19 @@ pub fn conversoes_ok() -> u16 {
     // amostragem escreve.
     unsafe { core::ptr::read_volatile(addr_of_mut!(DIAG_ADC_OK)) }
 }
+
+/// Diferenca entre a maior e a menor leitura desde a partida.
+///
+/// Se isto fica perto de zero depois de alguem apertar os botoes, o
+/// ADC nao esta vendo o divisor resistivo: pino, canal ou modo
+/// analogico.
+#[cfg(feature = "diag-botoes")]
+pub fn amplitude() -> u16 {
+    // SAFETY: leituras volateis de `static mut` que so a tarefa de
+    // amostragem escreve.
+    unsafe {
+        let min = core::ptr::read_volatile(addr_of_mut!(DIAG_AD_MIN));
+        let max = core::ptr::read_volatile(addr_of_mut!(DIAG_AD_MAX));
+        max.saturating_sub(min)
+    }
+}

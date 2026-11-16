@@ -199,8 +199,9 @@ rearma quando o painel volta ao repouso.
 
 ### Modo de diagnóstico dos botões
 
-Se o teste acima falhar, existe um build de bancada que mostra nos
-próprios LEDs o que o ADC está lendo — sem osciloscópio, sem debugger:
+Se o teste acima falhar, existe um build de bancada que descobre **em
+que escala o ADC está lendo** e mostra nos próprios LEDs — sem
+osciloscópio e sem debugger:
 
 ```bash
 cargo run --release --features diag-botoes
@@ -209,25 +210,34 @@ cargo run --release --features diag-botoes
 Ele troca a máquina de estados por um diagnóstico. **Os triacs ficam
 desligados o tempo todo**, então pode rodar sem água e sem carga.
 
+**Segure o botão de ON/OFF** enquanto olha os LEDs. As faixas dos
+botões são estreitas (795..845, por exemplo), então com um botão
+apertado só uma escala casa — não dá empate. Em repouso a faixa é larga
+e duas escalas podem casar ao mesmo tempo.
+
 | Padrão dos LEDs | Significa |
 |-----------------|-----------|
-| todos apagados | repouso (7..60) — o ADC está bom |
-| só o LED de ON/OFF aceso | botão **Pausa** reconhecido |
-| só o LED de mais secas aceso | botão **Mais Secas** reconhecido |
-| só o LED de enxágue duplo aceso | botão **Enxágue Duplo** reconhecido |
-| os três piscando juntos | valor **fora de todas as faixas** |
-| o LED de ON/OFF piscando sozinho | o ADC **não está convertendo** |
+| ON/OFF aceso **fixo** | escala ÷1 — o ADC está como o firmware espera |
+| mais secas aceso **fixo** | escala ÷2 — está lendo 11 bits |
+| enxágue duplo aceso **fixo** | escala ÷4 — está lendo **12 bits** |
+| ON/OFF + mais secas **fixos** | escala ÷8 |
+| os três **piscando juntos** | nenhuma escala casa, mas o valor varia |
+| **luz correndo** nos três | o valor não muda desde a partida |
+| os três **apagados** | o ADC não está convertendo |
 
-Os dois últimos são os casos de defeito, e são bem diferentes:
+As quatro primeiras linhas são diagnóstico fechado: a correção é no
+`DRES` de [mcu/adc.rs](src/mcu/adc.rs), ou dividir o resultado por essa
+escala. As três últimas são defeito de outra natureza:
 
-* **Fora de todas as faixas** — o ADC lê, mas o número não cai em
-  nenhuma janela de [botoes.rs](src/botoes.rs). É resolução (12 bits em
-  vez de 10) ou o divisor resistivo.
-* **Não está convertendo** — a conversão nem termina. É canal, clock ou
-  habilitação do periférico em [mcu/adc.rs](src/mcu/adc.rs).
+* **Nenhuma escala casa, valor varia** — o divisor resistivo responde,
+  mas os números não batem com nenhuma janela de
+  [botoes.rs](src/botoes.rs). Vale ler o valor cru pelo SWD (abaixo).
+* **Valor travado** — o ADC lê sempre a mesma coisa. É canal errado,
+  pino fora do modo analógico, ou o divisor não chegando a PA6.
+* **Não converte** — a conversão nem termina. É clock ou habilitação do
+  periférico.
 
-Com o diagnóstico rodando, aperte um botão de cada vez e veja em que
-caso cai. Depois volte ao build normal:
+Depois volte ao build normal:
 
 ```bash
 cargo run --release

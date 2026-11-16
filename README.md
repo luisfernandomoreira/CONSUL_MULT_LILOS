@@ -882,8 +882,8 @@ Cerca de **28% dos 63 KB** de flash disponíveis.
 ### Build de bancada para os botões
 
 Se os botões do painel não responderem, há um build que troca a máquina
-de estados por um diagnóstico que mostra nos três LEDs o que o ADC está
-lendo — sem osciloscópio e sem debugger:
+de estados por um diagnóstico que descobre **em que escala o ADC está
+lendo** e mostra nos três LEDs — sem osciloscópio e sem debugger:
 
 ```bash
 cargo run --release --features diag-botoes
