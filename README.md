@@ -6,6 +6,11 @@ STM32C031K6T6 + HAL/LL) para o **GD32C231K8T6** em **Rust** com o RTOS
 
 A placa é a mesma. Só mudou o microcontrolador e a linguagem.
 
+> **Vai gravar a primeira placa?** Siga o
+> **[Roteiro de bancada](ROTEIRO_BANCADA.md)** — 12 passos, do teste de
+> continuidade ao ciclo completo, com o que medir em cada pino e o que
+> cada ritmo de pisca dos LEDs quer dizer.
+
 ---
 
 ## 1. Por que a placa não muda
@@ -412,6 +417,8 @@ cargo build --release
 ```
 
 ### Gravar na placa (SWD por PA13/PA14)
+
+Na primeira placa, vá pelo [Roteiro de bancada](ROTEIRO_BANCADA.md).
 
 ```bash
 cargo run --release
