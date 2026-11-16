@@ -254,3 +254,49 @@ pub fn pico() -> u16 {
     // SAFETY: leitura volatil de um `static mut`.
     unsafe { core::ptr::read_volatile(addr_of_mut!(DIAG_PICO)) }
 }
+
+// ═════════════════════════════════════════════════════════════════════════════
+// PATAMARES (build de bancada)
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// Quantos patamares distintos o diagnostico guarda.
+pub const NUM_PLATOS: usize = 6;
+
+/// Valores que ficaram ESTAVEIS por algumas amostras seguidas.
+///
+/// Cada botao do painel produz um patamar proprio. Aperte os tres, um
+/// por vez, e isto fica com os tres valores — e so copia-los para as
+/// faixas de `botoes.rs`.
+#[no_mangle]
+pub static mut DIAG_PLATOS: [u16; NUM_PLATOS] = [0; NUM_PLATOS];
+
+/// Quantos patamares distintos ja foram vistos.
+#[no_mangle]
+pub static mut DIAG_PLATOS_N: u16 = 0;
+
+/// Diferenca minima para dois patamares serem considerados distintos.
+#[cfg(feature = "diag-botoes")]
+const DISTANCIA_PLATO: u16 = 30;
+
+/// Guarda um patamar, se ainda nao houver um parecido.
+#[cfg(feature = "diag-botoes")]
+pub fn registra_plato(valor: u16) {
+    // SAFETY: escritas volateis em `static mut` que so a tarefa de
+    // diagnostico escreve, com indice conferido.
+    unsafe {
+        let base = addr_of_mut!(DIAG_PLATOS) as *mut u16;
+        let n = core::ptr::read_volatile(addr_of_mut!(DIAG_PLATOS_N)) as usize;
+
+        for i in 0..n.min(NUM_PLATOS) {
+            let ja = core::ptr::read_volatile(base.add(i));
+            if valor.abs_diff(ja) <= DISTANCIA_PLATO {
+                return; // ja temos este patamar
+            }
+        }
+
+        if n < NUM_PLATOS {
+            core::ptr::write_volatile(base.add(n), valor);
+            core::ptr::write_volatile(addr_of_mut!(DIAG_PLATOS_N), (n + 1) as u16);
+        }
+    }
+}

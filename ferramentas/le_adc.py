@@ -33,6 +33,33 @@ CHIP = "GD32C231K8"
 
 NUM_CANAIS = 16
 
+# O que a placa tem em cada canal do ADC. No GD32C2x1 a numeracao
+# acompanha o pino: IN0..IN7 em PA0..PA7, IN8..IN10 em PB0..PB2 e
+# IN12 em PA12. Os canais 13 e 14 sao sensores internos.
+#
+# Saber quais pinos o FIRMWARE aciona e essencial: a tensao deles muda
+# por conta do proprio diagnostico, nao de botao nenhum. Sem isso o
+# canal 1 (o LED de ON/OFF, que o diagnostico pisca) aparece como o
+# que "mais varia" e manda procurar no lugar errado.
+CANAIS = {
+    0:  ("PA0",  "livre", False),
+    1:  ("PA1",  "LED ON/OFF - SAIDA, o diagnostico pisca", True),
+    2:  ("PA2",  "valvula de sabao - SAIDA", True),
+    3:  ("PA3",  "atuador - SAIDA", True),
+    4:  ("PA4",  "tampa eletronica - entrada", False),
+    5:  ("PA5",  "pressostato - entrada", False),
+    6:  ("PA6",  "BOTOES DO PAINEL", False),
+    7:  ("PA7",  "tampa mecanica - entrada", False),
+    8:  ("PB0",  "livre", False),
+    9:  ("PB1",  "livre", False),
+    10: ("PB2",  "bomba - SAIDA", True),
+    11: ("?",    "", False),
+    12: ("PA12", "SW1 - entrada", False),
+    13: ("-",    "sensor de temperatura interno", False),
+    14: ("-",    "referencia interna", False),
+    15: ("?",    "", False),
+}
+
 # Faixas de botoes.rs, para a tabela dizer em que faixa cada valor cai.
 FAIXAS = [
     ("repouso", 7, 60),
@@ -146,6 +173,25 @@ def main():
         if pico[0] == 0:
             print("  Nenhum aperto registrado ainda.")
 
+    # Patamares: um por botao, se o diagnostico ja os viu.
+    NUM_PLATOS = 6
+    platos = le(mapa["DIAG_PLATOS"], NUM_PLATOS)
+    platos_n = le(mapa["DIAG_PLATOS_N"], 1)
+    if platos and platos_n:
+        n = min(platos_n[0], NUM_PLATOS)
+        print("")
+        print("Patamares estaveis no canal dos botoes: %d" % n)
+        if n == 0:
+            print("  Nenhum ainda. Aperte e SEGURE cada botao por ~1 s.")
+        for i in range(n):
+            v = platos[i]
+            print("  %4d   faixa: %s" % (v, faixa_de(v) or "NENHUMA"))
+        if n:
+            print("")
+            print("  O patamar baixo e o repouso. Os outros sao os botoes.")
+            print("  Se algum sair como NENHUMA, me passe o numero: e so")
+            print("  ajustar a faixa correspondente em src/botoes.rs.")
+
     canais = le(mapa["DIAG_CANAIS"], NUM_CANAIS)
     minimos = le(mapa["DIAG_CANAIS_MIN"], NUM_CANAIS)
     maximos = le(mapa["DIAG_CANAIS_MAX"], NUM_CANAIS)
@@ -155,20 +201,28 @@ def main():
         print("build de bancada? (`cargo run --features diag-botoes`)")
         sys.exit(1)
 
-    print("\n%-7s %8s %8s %8s %10s  %s" % (
-        "canal", "agora", "min", "max", "variacao", "faixa"))
-    print("-" * 62)
+    print("")
+    print("%-3s %-5s %7s %7s %7s %6s  %-13s %s" % (
+        "ch", "pino", "agora", "min", "max", "varia", "faixa", "o que e"))
+    print("-" * 96)
 
     candidatos = []
     for c in range(NUM_CANAIS):
         variacao = max(0, maximos[c] - minimos[c])
+        pino, papel, saida = CANAIS.get(c, ("?", "", False))
+
         marca = ""
         if variacao >= 20:
-            candidatos.append((variacao, c))
-            marca = "  <== varia"
-        print("%-7d %8d %8d %8d %10d  %-14s%s" % (
-            c, canais[c], minimos[c], maximos[c], variacao,
-            faixa_de(canais[c]), marca))
+            if saida:
+                # Pino que o firmware aciona: a variacao e nossa, nao de botao.
+                marca = "  (saida do firmware)"
+            else:
+                candidatos.append((variacao, c))
+                marca = "  <== varia"
+
+        print("%-3d %-5s %7d %7d %7d %6d  %-13s %s%s" % (
+            c, pino, canais[c], minimos[c], maximos[c], variacao,
+            faixa_de(canais[c]), papel, marca))
 
     print()
     if not candidatos:

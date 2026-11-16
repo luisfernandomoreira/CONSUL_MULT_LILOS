@@ -273,6 +273,19 @@ Isso não se conserta no firmware. Nesta ordem:
    Tem de haver um patamar estável por botão. Se não houver tensão
    definida no pino, o problema é na placa.
 
+#### Os patamares de cada botão
+
+O diagnóstico também guarda os **valores estáveis** que viu. Cada botão
+produz um patamar próprio, então:
+
+1. Grave o build de bancada;
+2. Aperte e **segure** cada botão por ~1 s, um por vez;
+3. Rode o script — ele lista os patamares e diz em que faixa cada um
+   cai.
+
+É assim que se calibra [botoes.rs](src/botoes.rs) para uma placa nova:
+qualquer patamar que saia como `NENHUMA` é uma faixa a ajustar.
+
 #### O log das últimas 64 leituras
 
 Para ver a sequência de valores em volta de um aperto:

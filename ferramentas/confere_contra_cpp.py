@@ -459,8 +459,37 @@ for nome in ["REPOUSO", "FAIXA_PAUSE", "FAIXA_MAIS_SECAS", "FAIXA_ENXAGUE_DUPLO"
     assert m, nome
     faixas_rs.append(tuple(nums(m.group(1))))
 
-print("\n=== FAIXAS DO ADC DOS BOTOES (gerenciaInterface) ===")
-confere("4 faixas", faixas_cpp, faixas_rs)
+# As faixas do ADC sao o UNICO lugar em que o porte divergiu de
+# proposito. Medido na bancada, o mesmo divisor resistivo le cerca de
+# 31 contagens abaixo no GD32: o repouso da 0 em vez de ~33, e o botao
+# de ON/OFF da 789 em vez de ~820. As faixas do Rust foram alargadas
+# para cobrir as duas escalas. Por isso aqui so comparamos e
+# explicamos, sem contar como falha.
+print("\n=== FAIXAS DO ADC DOS BOTOES (divergencia esperada) ===")
+NOMES_FAIXAS = ["repouso", "PAUSA", "MAIS SECAS", "ENXAGUE DUPLO"]
+if len(faixas_cpp) == len(faixas_rs) == 4:
+    print("  %-14s %-14s %-14s" % ("faixa", "C++ (STM32)", "Rust (GD32)"))
+    for nome, c, r in zip(NOMES_FAIXAS, faixas_cpp, faixas_rs):
+        igual = "iguais" if c == r else "alargada"
+        print("  %-14s %-14s %-14s %s"
+              % (nome, "%d..%d" % c, "%d..%d" % r, igual))
+    # O que precisa continuar valendo: as faixas do Rust nao podem se
+    # sobrepor, e precisam conter as do C++.
+    for i in range(3):
+        if faixas_rs[i][1] >= faixas_rs[i + 1][0]:
+            confere(
+                "faixas %s e %s se sobrepoem" % (NOMES_FAIXAS[i], NOMES_FAIXAS[i + 1]),
+                [True],
+                [False],
+            )
+    for nome, c, r in zip(NOMES_FAIXAS, faixas_cpp, faixas_rs):
+        confere(
+            "faixa %s do Rust contem a do C++" % nome,
+            [True],
+            [r[0] <= c[0] and r[1] >= c[1]],
+        )
+else:
+    confere("4 faixas", faixas_cpp, faixas_rs)
 
 print("\n" + "=" * 62)
 if falhas:

@@ -685,6 +685,7 @@ deram trabalho:
 | PA6 é o canal 6? | **Sim.** No GD32C2x1 a numeração acompanha o pino: IN0..IN7 em PA0..PA7. Coincide com o `ADC1_IN6` do STM32 |
 | `DRES = 0b01` é 10 bits? | **Sim.** 00 = 12, 01 = 10, 10 = 8, 11 = 6 |
 | O clock do ADC podia ficar no reset? | **Não.** Era bug — veja abaixo |
+| As faixas do C++ valiam no GD32? | **Não.** O mesmo divisor lê ~31 contagens abaixo — veja abaixo |
 
 Os dois bugs que a bancada revelou, ambos invisíveis em simples
 tradução do código do STM32:
@@ -696,6 +697,24 @@ tradução do código do STM32:
 2. **O disparo por software exige `ETSRC = 111` e `ETERC = 1`.** Sem os
    dois, escrever `SWRCST` não inicia conversão nenhuma. No STM32 isso
    não existe: `LL_ADC_REG_StartConversion` basta.
+
+E a terceira coisa, que só a medição podia dizer: **as faixas de tensão
+dos botões não são as mesmas do STM32.** Medido nesta placa, o divisor
+lê cerca de **31 contagens abaixo** — o repouso dá `0` em vez de ~33, e
+o botão de ON/OFF dá `789` em vez de ~820. É deslocamento, não escala:
+ganho errado daria a mesma razão nos dois pontos.
+
+O efeito do limite inferior de 7 na faixa de repouso era grave e
+silencioso: o ferrolho que arma a próxima ação só arma quando a leitura
+cai nessa faixa. Lendo `0`, **nunca armava**, e nenhum botão funcionava.
+E só o **modelo 6** revelava isso, porque é o único que depende do botão
+para retomar depois da tampa — nos outros a retomada é automática.
+
+As faixas de [botoes.rs](src/botoes.rs) foram **alargadas** (não
+deslocadas), para cobrir as duas escalas. O
+`ferramentas/confere_contra_cpp.py` sabe dessa divergência: mostra as
+duas lado a lado e confere que as novas não se sobrepõem e contêm as
+antigas.
 
 Sobrou um ponto aberto, que não é do ADC:
 

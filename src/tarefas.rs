@@ -351,6 +351,13 @@ pub async fn diagnostico_botoes(s: &Saidas, adc_periferico: &Adc) -> Infallible 
     let mut paradas: u8 = 0;
     let mut varredura: u8 = 0;
 
+    // Detector de patamar: um valor que nao se mexe por algumas
+    // amostras seguidas e um botao segurado, nao ruido de transicao.
+    const TOLERANCIA: u16 = 8;
+    const AMOSTRAS_ESTAVEIS: u8 = 3;
+    let mut referencia: u16 = 0;
+    let mut estaveis: u8 = 0;
+
     let mut gate = PeriodicGate::from(Millis(PASSO_MS));
     loop {
         gate.next_time().await;
@@ -364,6 +371,17 @@ pub async fn diagnostico_botoes(s: &Saidas, adc_periferico: &Adc) -> Infallible 
                 diag::registra_leitura(valor);
                 diag::registra_log(valor);
                 leituras::set_ad(valor);
+
+                // Patamar: estavel por AMOSTRAS_ESTAVEIS leituras.
+                if valor.abs_diff(referencia) <= TOLERANCIA {
+                    estaveis = estaveis.saturating_add(1);
+                    if estaveis == AMOSTRAS_ESTAVEIS {
+                        diag::registra_plato(valor);
+                    }
+                } else {
+                    referencia = valor;
+                    estaveis = 0;
+                }
             }
             None => diag::registra_falha(),
         }
