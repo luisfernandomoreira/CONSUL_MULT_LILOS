@@ -674,22 +674,40 @@ motivos:
 | 7 | ADC em modo contínuo, start/stop a cada leitura | uma conversão por disparo | mesmo resultado, menos registrador para mexer |
 | 8 | girar o seletor **não** zera o contador de ciclos do molho (`cicloAtual` é `static` dentro de `Molho()`) | zera | sem isso, trocar de programa no meio do molho leva o contador velho para o programa novo, que pode pular quase todo o molho. **Mudança de comportamento assumida** — se a fábrica preferir o jeito antigo, é remover três linhas de `selecionar_nova_lavagem` |
 
-### Pontos a conferir em bancada
+### O ADC, e o que ele custou
 
-1. **PA6 → canal 6 do ADC.** Vem do `ADC1_IN6` do STM32 (mesma
-   pinagem), mas confirme no User Manual do GD32C231 antes de confiar
-   nas faixas dos botões.
-2. **Resolução do ADC.** `DRES = 0b01` assume a codificação usual da
-   GigaDevice (00 = 12 bits, 01 = 10 bits). Se as faixas saírem
-   deslocadas, é aqui.
-3. **Clock do ADC.** Ficou no valor de reset, compensado pelo tempo de
-   amostragem mais longo. Se a leitura vier instável, veja
-   `RCU_CFG1.ADCSEL/ADCPSC`.
-4. **Debounce da tampa** (item 3 da tabela acima).
+Três dos quatro pontos que ficaram em aberto no porte eram sobre o ADC
+dos botões, e a bancada resolveu todos. Vale registrar, porque dois
+deram trabalho:
 
-Os três primeiros afetam só os botões do painel — o ciclo, a tampa e o
-pressostato não dependem do ADC. O
-[Roteiro de bancada](ROTEIRO_BANCADA.md) tem um passo para cada um.
+| Dúvida do porte | Resposta |
+|-----------------|----------|
+| PA6 é o canal 6? | **Sim.** No GD32C2x1 a numeração acompanha o pino: IN0..IN7 em PA0..PA7. Coincide com o `ADC1_IN6` do STM32 |
+| `DRES = 0b01` é 10 bits? | **Sim.** 00 = 12, 01 = 10, 10 = 8, 11 = 6 |
+| O clock do ADC podia ficar no reset? | **Não.** Era bug — veja abaixo |
+
+Os dois bugs que a bancada revelou, ambos invisíveis em simples
+tradução do código do STM32:
+
+1. **CK_ADC tem limite de 24 MHz.** O firmware C++ roda o núcleo a
+   24 MHz e ainda divide o clock do ADC por 4. Este roda a 48 MHz e eu
+   havia deixado o `ADCPSC` no valor de reset — o ADC ficava a 48 MHz,
+   o dobro do limite, devolvendo valor constante.
+2. **O disparo por software exige `ETSRC = 111` e `ETERC = 1`.** Sem os
+   dois, escrever `SWRCST` não inicia conversão nenhuma. No STM32 isso
+   não existe: `LL_ADC_REG_StartConversion` basta.
+
+Sobrou um ponto aberto, que não é do ADC:
+
+* **Debounce da tampa** — item 3 da tabela acima: 2 leituras de 21 ms
+  (~42 ms) no lugar das ~250 leituras do laço livre do C++. Vale
+  conferir se atende a abertura de tampa desta máquina.
+
+O caminho que fechou isso está no
+[Roteiro de bancada](ROTEIRO_BANCADA.md#modo-de-diagnóstico-dos-botões):
+o build `--features diag-botoes` varre os 16 canais e pisca o número do
+que se move. A referência da sequência correta do periférico é a seção
+11 do **GD32C2x1 User Manual Rev1.2**.
 
 ---
 

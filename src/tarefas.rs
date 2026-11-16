@@ -311,7 +311,8 @@ pub async fn watchdog(wdt_periferico: &Fwdgt, rcu: &Rcu) -> Infallible {
 ///
 /// | O que aparece | Significa |
 /// |---|---|
-/// | **luz correndo** nos tres | nenhum canal variou ainda — aperte um botao |
+/// | os tres **apagados** | o ADC nao esta convertendo |
+/// | **luz correndo** nos tres | converte, mas nenhum canal variou — aperte um botao |
 /// | **1 pisca** do LED de mais secas, depois N piscas do LED de ON/OFF | o canal e **N** |
 ///
 /// O pisca do LED de mais secas marca o inicio da contagem. Se depois
@@ -333,12 +334,17 @@ pub async fn diagnostico_botoes(s: &Saidas, adc_periferico: &Adc) -> Infallible 
     const POR_PISCA: u32 = 4;
     /// Pausa entre rodadas, em passos.
     const ENTRE_RODADAS: u32 = 12;
+    /// Passos sem o contador de conversoes andar para declarar o ADC
+    /// parado (~1 s).
+    const PACIENCIA: u8 = 10;
 
     s.desliga_todos_triacs();
     s.apaga_leds();
 
     let mut passo: u32 = 0;
     let mut canal_mostrado: Option<usize> = None;
+    let mut ultimo_ok = diag::conversoes_ok();
+    let mut paradas: u8 = 0;
 
     let mut gate = PeriodicGate::from(Millis(PASSO_MS));
     loop {
@@ -350,9 +356,27 @@ pub async fn diagnostico_botoes(s: &Saidas, adc_periferico: &Adc) -> Infallible 
         // Varre todos os canais em cada passo, para pegar o aperto do
         // botao mesmo no meio de uma contagem.
         for canal in 0..adc::NUM_CANAIS {
-            if let Some(valor) = adc::converte_canal(adc_periferico, canal) {
-                diag::registra_canal(canal as usize, valor);
+            match adc::converte_canal(adc_periferico, canal) {
+                Some(valor) => {
+                    diag::registra_canal(canal as usize, valor);
+                    diag::registra_leitura(valor);
+                }
+                None => diag::registra_falha(),
             }
+        }
+
+        // O ADC esta convertendo? Sem este teste, "nenhum canal varia"
+        // e "nada converte" dariam o mesmo padrao nos LEDs.
+        let ok = diag::conversoes_ok();
+        if ok == ultimo_ok {
+            paradas = paradas.saturating_add(1);
+        } else {
+            paradas = 0;
+            ultimo_ok = ok;
+        }
+        if paradas >= PACIENCIA {
+            s.apaga_leds();
+            continue;
         }
 
         let achado = diag::canal_mais_ativo(VARIACAO_MINIMA);

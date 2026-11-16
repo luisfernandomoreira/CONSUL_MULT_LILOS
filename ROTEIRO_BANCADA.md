@@ -194,8 +194,14 @@ rearma quando o painel volta ao repouso.
 |---------|----------------|------------|
 | **Nenhum** botão funciona | a leitura de repouso caiu fora de 7..60, então a ação nunca rearma | `REPOUSO` em [botoes.rs](src/botoes.rs) |
 | Botão **errado** responde | escala deslocada — a resolução não é 10 bits | `DRES_10_BITS` em [mcu/adc.rs](src/mcu/adc.rs) |
-| Resposta **errática** | clock do ADC ou tempo de amostragem | `SPT_MAIS_LONGO` e `RCU_CFG1.ADCSEL/ADCPSC` |
-| Nada, nem errático | canal errado | `CANAL_BOTOES` em [mcu/adc.rs](src/mcu/adc.rs) |
+| Resposta **errática** | clock do ADC ou tempo de amostragem | `ADCPSC_DIV4` em [mcu/adc.rs](src/mcu/adc.rs) |
+| Nada, nem errático | canal errado, ou o disparo não chega | `CANAL_BOTOES` e `ETSRC_SOFTWARE` em [mcu/adc.rs](src/mcu/adc.rs) |
+
+> O GD32 tem duas exigências que o STM32 não tem, e qualquer uma delas
+> sozinha faz o ADC devolver valor constante: **CK_ADC no máximo
+> 24 MHz** (com o núcleo a 48 MHz, o `ADCPSC` precisa dividir) e
+> **`ETSRC = 111` com `ETERC = 1`** para o disparo por software
+> funcionar. Ambas já estão em [mcu/adc.rs](src/mcu/adc.rs).
 
 ### Modo de diagnóstico dos botões
 
@@ -227,7 +233,8 @@ resistivo mexe a tensão de **um canal só**, e é esse o certo.
 
 | O que aparece | Significa |
 |---------------|-----------|
-| **luz correndo** nos três | nenhum canal variou ainda — aperte um botão |
+| os três **apagados** | o ADC não está convertendo |
+| **luz correndo** nos três | converte, mas nenhum canal variou — aperte um botão |
 | **1 pisca** do LED de mais secas, depois **N piscas** do LED de ON/OFF | o canal é **N** |
 
 O pisca do LED de mais secas marca o início da contagem. Se depois
