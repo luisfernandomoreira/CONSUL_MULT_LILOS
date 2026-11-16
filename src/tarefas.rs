@@ -281,7 +281,7 @@ pub async fn watchdog(wdt_periferico: &Fwdgt, rcu: &Rcu) -> Infallible {
 // TAREFA: DIAGNOSTICO DOS BOTOES (build de bancada)
 // ═════════════════════════════════════════════════════════════════════════════
 
-/// Descobre em que ESCALA o ADC esta lendo e mostra nos tres LEDs.
+/// Varre os 16 canais do ADC e pisca o numero daquele que se move.
 ///
 /// Entra no lugar da maquina de estados quando o firmware e compilado
 /// com a feature `diag-botoes`:
@@ -291,121 +291,115 @@ pub async fn watchdog(wdt_periferico: &Fwdgt, rcu: &Rcu) -> Infallible {
 /// ```
 ///
 /// Os triacs ficam desligados o tempo todo — da para rodar com a placa
-/// na bancada, sem agua e sem carga.
+/// na bancada, sem agua e sem carga. O watchdog tambem fica de fora
+/// neste build, para o `probe-rs` poder parar o nucleo sem resetar a
+/// placa.
 ///
-/// ─── Como ler ────────────────────────────────────────────────
+/// ─── Para que serve ──────────────────────────────────────────
 ///
-/// **Segure o botao de ON/OFF** enquanto olha os LEDs. As faixas dos
-/// botoes sao estreitas (795..845, por exemplo), entao com um botao
-/// apertado so uma escala casa — nao da empate. Em repouso a faixa e
-/// larga e duas escalas podem casar ao mesmo tempo.
+/// O numero do canal do ADC ligado ao PA6 veio do `ADC1_IN6` do
+/// STM32C031, nao do manual do GD32C231. Se o canal estiver errado, o
+/// firmware le um pino que nao e o do painel — e o valor fica parado,
+/// porque nada mexe nele.
 ///
-/// | Padrao dos LEDs | Significa |
+/// Esta tarefa resolve isso por medida, nao por suposicao: le **todos**
+/// os canais e procura o que varia. Aperte e solte um botao do painel
+/// algumas vezes; o divisor resistivo mexe a tensao de **um canal so**,
+/// e e esse o certo.
+///
+/// ─── Como ler os LEDs ────────────────────────────────────────
+///
+/// | O que aparece | Significa |
 /// |---|---|
-/// | ON/OFF aceso **fixo** | escala ÷1 — o ADC esta como o firmware espera |
-/// | mais secas aceso **fixo** | escala ÷2 — esta lendo 11 bits |
-/// | enxague duplo aceso **fixo** | escala ÷4 — esta lendo **12 bits** |
-/// | ON/OFF + mais secas **fixos** | escala ÷8 |
-/// | os tres **piscando juntos** | nenhuma escala casa, mas o valor varia |
-/// | **luz correndo** nos tres | o valor nao muda desde a partida |
-/// | os tres **apagados** | o ADC nao esta convertendo |
+/// | **luz correndo** nos tres | nenhum canal variou ainda — aperte um botao |
+/// | **1 pisca** do LED de mais secas, depois N piscas do LED de ON/OFF | o canal e **N** |
 ///
-/// As quatro primeiras linhas sao diagnostico fechado: a correcao e no
-/// `DRES` de [`crate::mcu::adc`], ou dividir o resultado por essa
-/// escala. As tres ultimas sao defeito de outra natureza — valor
-/// travado, canal errado ou periferico sem converter.
+/// O pisca do LED de mais secas marca o inicio da contagem. Se depois
+/// dele nao vier pisca nenhum, o canal e **0**.
+///
+/// Achado o numero, corrija `CANAL_BOTOES` em [`crate::mcu::adc`].
 #[cfg(feature = "diag-botoes")]
-pub async fn diagnostico_botoes(s: &Saidas) -> Infallible {
-    /// Escalas testadas, da mais provavel para a menos.
-    const ESCALAS: [u16; 4] = [1, 2, 4, 8];
+pub async fn diagnostico_botoes(s: &Saidas, adc_periferico: &Adc) -> Infallible {
+    /// Variacao minima para considerar que um canal se mexeu. O ruido
+    /// de um canal parado fica bem abaixo disto.
+    const VARIACAO_MINIMA: u16 = 20;
 
-    const PERIODO_MS: u64 = 120;
-    /// Passadas sem o contador de conversoes andar para declarar o ADC
-    /// parado (~1,2 s).
-    const PACIENCIA: u8 = 10;
-    /// Abaixo desta variacao total, o valor e considerado travado.
-    const AMPLITUDE_MINIMA: u16 = 10;
-
-    /// Em que escala o valor cai numa faixa conhecida.
-    ///
-    /// Tenta primeiro as faixas dos botoes, que sao estreitas e nao
-    /// dao empate; so depois o repouso, que e largo.
-    fn escala(ad: u16) -> Option<u16> {
-        if let Some(d) = ESCALAS
-            .into_iter()
-            .find(|&d| crate::botoes::identifica(ad / d).is_some())
-        {
-            return Some(d);
-        }
-        ESCALAS.into_iter().find(|&d| crate::botoes::em_repouso(ad / d))
-    }
+    const PASSO_MS: u64 = 100;
+    /// Duracao do pisca marcador, em passos.
+    const MARCADOR: u32 = 3;
+    /// Pausa depois do marcador, em passos.
+    const APOS_MARCADOR: u32 = 3;
+    /// Cada pisca da contagem: 2 passos aceso, 2 apagados.
+    const POR_PISCA: u32 = 4;
+    /// Pausa entre rodadas, em passos.
+    const ENTRE_RODADAS: u32 = 12;
 
     s.desliga_todos_triacs();
     s.apaga_leds();
 
-    let mut ultimo_ok = diag::conversoes_ok();
-    let mut paradas: u8 = 0;
-    let mut fase: u8 = 0;
+    let mut passo: u32 = 0;
+    let mut canal_mostrado: Option<usize> = None;
 
-    let mut gate = PeriodicGate::from(Millis(PERIODO_MS));
+    let mut gate = PeriodicGate::from(Millis(PASSO_MS));
     loop {
         gate.next_time().await;
 
         // Os triacs nunca ligam neste modo.
         s.desliga_todos_triacs();
-        fase = (fase + 1) % 4;
-        let pisca = fase < 2;
 
-        // ── O ADC esta convertendo? ──
-        let ok = diag::conversoes_ok();
-        if ok == ultimo_ok {
-            paradas = paradas.saturating_add(1);
-        } else {
-            paradas = 0;
-            ultimo_ok = ok;
-        }
-        if paradas >= PACIENCIA {
-            s.apaga_leds();
-            continue;
+        // Varre todos os canais em cada passo, para pegar o aperto do
+        // botao mesmo no meio de uma contagem.
+        for canal in 0..adc::NUM_CANAIS {
+            if let Some(valor) = adc::converte_canal(adc_periferico, canal) {
+                diag::registra_canal(canal as usize, valor);
+            }
         }
 
-        // ── O valor se move? ──
-        if diag::amplitude() < AMPLITUDE_MINIMA {
-            // Luz correndo: valor travado desde a partida.
+        let achado = diag::canal_mais_ativo(VARIACAO_MINIMA);
+
+        // Trocou o canal mais ativo? Recomeca a contagem do zero, para
+        // ninguem contar piscas de duas rodadas diferentes.
+        if achado != canal_mostrado {
+            canal_mostrado = achado;
+            passo = 0;
+        }
+
+        let Some(canal) = canal_mostrado else {
+            // Nenhum canal variou: luz correndo, pedindo um aperto.
+            let fase = (passo / 2) % 3;
             s.led_pause(fase == 0);
             s.led_mais_secas(fase == 1);
             s.led_enxague_duplo(fase == 2);
+            passo = passo.wrapping_add(1);
             continue;
+        };
+
+        // Sequencia: marcador, pausa, N piscas, pausa longa.
+        let piscas = canal as u32;
+        let fim_marcador = MARCADOR;
+        let fim_pausa = fim_marcador + APOS_MARCADOR;
+        let fim_contagem = fim_pausa + piscas * POR_PISCA;
+        let total = fim_contagem + ENTRE_RODADAS;
+
+        let p = passo % total;
+
+        s.led_enxague_duplo(false);
+        if p < fim_marcador {
+            // Marcador: o LED de mais secas.
+            s.led_mais_secas(true);
+            s.led_pause(false);
+        } else if p < fim_pausa {
+            s.led_mais_secas(false);
+            s.led_pause(false);
+        } else if p < fim_contagem {
+            // Contagem no LED de ON/OFF.
+            s.led_mais_secas(false);
+            s.led_pause((p - fim_pausa) % POR_PISCA < 2);
+        } else {
+            s.led_mais_secas(false);
+            s.led_pause(false);
         }
 
-        // ── Em que escala o ADC esta lendo? ──
-        match escala(leituras::ad()) {
-            Some(1) => {
-                s.led_pause(true);
-                s.led_mais_secas(false);
-                s.led_enxague_duplo(false);
-            }
-            Some(2) => {
-                s.led_pause(false);
-                s.led_mais_secas(true);
-                s.led_enxague_duplo(false);
-            }
-            Some(4) => {
-                s.led_pause(false);
-                s.led_mais_secas(false);
-                s.led_enxague_duplo(true);
-            }
-            Some(_) => {
-                s.led_pause(true);
-                s.led_mais_secas(true);
-                s.led_enxague_duplo(false);
-            }
-            // Nenhuma escala casa, mas o valor varia.
-            None => {
-                s.led_pause(pisca);
-                s.led_mais_secas(pisca);
-                s.led_enxague_duplo(pisca);
-            }
-        }
+        passo = passo.wrapping_add(1);
     }
 }

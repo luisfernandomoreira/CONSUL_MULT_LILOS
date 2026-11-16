@@ -199,8 +199,8 @@ rearma quando o painel volta ao repouso.
 
 ### Modo de diagnóstico dos botões
 
-Se o teste acima falhar, existe um build de bancada que descobre **em
-que escala o ADC está lendo** e mostra nos próprios LEDs — sem
+Se o teste acima falhar, existe um build de bancada que **varre os 16
+canais do ADC e pisca o número daquele que se move** — sem
 osciloscópio e sem debugger:
 
 ```bash
@@ -208,34 +208,54 @@ cargo run --release --features diag-botoes
 ```
 
 Ele troca a máquina de estados por um diagnóstico. **Os triacs ficam
-desligados o tempo todo**, então pode rodar sem água e sem carga.
+desligados o tempo todo**, então pode rodar sem água e sem carga. O
+watchdog também fica de fora, para o `probe-rs` poder parar o núcleo
+sem a placa resetar.
 
-**Segure o botão de ON/OFF** enquanto olha os LEDs. As faixas dos
-botões são estreitas (795..845, por exemplo), então com um botão
-apertado só uma escala casa — não dá empate. Em repouso a faixa é larga
-e duas escalas podem casar ao mesmo tempo.
+#### Por que varrer os canais
 
-| Padrão dos LEDs | Significa |
-|-----------------|-----------|
-| ON/OFF aceso **fixo** | escala ÷1 — o ADC está como o firmware espera |
-| mais secas aceso **fixo** | escala ÷2 — está lendo 11 bits |
-| enxágue duplo aceso **fixo** | escala ÷4 — está lendo **12 bits** |
-| ON/OFF + mais secas **fixos** | escala ÷8 |
-| os três **piscando juntos** | nenhuma escala casa, mas o valor varia |
-| **luz correndo** nos três | o valor não muda desde a partida |
-| os três **apagados** | o ADC não está convertendo |
+O número do canal ligado ao PA6 veio do `ADC1_IN6` do STM32C031, não
+do manual do GD32C231 — é o ponto aberto nº 1. Se o canal estiver
+errado, o firmware lê um pino que não é o do painel, e o valor fica
+**parado**, porque nada mexe nele.
 
-As quatro primeiras linhas são diagnóstico fechado: a correção é no
-`DRES` de [mcu/adc.rs](src/mcu/adc.rs), ou dividir o resultado por essa
-escala. As três últimas são defeito de outra natureza:
+O diagnóstico resolve isso por medida: lê todos os canais e procura o
+que varia. Aperte e solte um botão do painel algumas vezes; o divisor
+resistivo mexe a tensão de **um canal só**, e é esse o certo.
 
-* **Nenhuma escala casa, valor varia** — o divisor resistivo responde,
-  mas os números não batem com nenhuma janela de
-  [botoes.rs](src/botoes.rs). Vale ler o valor cru pelo SWD (abaixo).
-* **Valor travado** — o ADC lê sempre a mesma coisa. É canal errado,
-  pino fora do modo analógico, ou o divisor não chegando a PA6.
-* **Não converte** — a conversão nem termina. É clock ou habilitação do
-  periférico.
+#### Como ler os LEDs
+
+| O que aparece | Significa |
+|---------------|-----------|
+| **luz correndo** nos três | nenhum canal variou ainda — aperte um botão |
+| **1 pisca** do LED de mais secas, depois **N piscas** do LED de ON/OFF | o canal é **N** |
+
+O pisca do LED de mais secas marca o início da contagem. Se depois
+dele não vier pisca nenhum, o canal é **0**.
+
+Achado o número, ajuste `CANAL_BOTOES` em [mcu/adc.rs](src/mcu/adc.rs).
+
+#### Os números exatos, pelo SWD
+
+Se quiser a tabela com os valores de todos os canais:
+
+```bash
+python -I ferramentas/le_adc.py
+```
+
+Ele compila, levanta os endereços no ELF e chama o `probe-rs` sozinho.
+Mostra, por canal, o valor atual, o mínimo, o máximo, a variação e em
+que faixa de [botoes.rs](src/botoes.rs) o valor cai.
+
+Para essa leitura use o build **dev**, que mantém os símbolos (o
+release os apaga e os endereços mudam):
+
+```bash
+cargo run --features diag-botoes
+```
+
+O dev tem a mesma otimização do release — `opt-level = "z"` e LTO —, só
+guarda os símbolos.
 
 Depois volte ao build normal:
 
@@ -243,34 +263,16 @@ Depois volte ao build normal:
 cargo run --release
 ```
 
-### Ver o número exato pelo SWD
+#### Se nenhum canal variar
 
-Para o valor cru, o firmware deixa cinco contadores em RAM com símbolo
-fixo: `DIAG_AD`, `DIAG_AD_MIN`, `DIAG_AD_MAX`, `DIAG_ADC_OK` e
-`DIAG_ADC_FALHA`. O perfil release apaga os símbolos, então levante os
-endereços no build de depuração, que tem a mesma otimização:
+Aí não é número de canal: o divisor resistivo não está chegando ao
+conversor. Nessa ordem:
 
-```bash
-cargo build
-```
-
-```bash
-arm-none-eabi-nm target/thumbv6m-none-eabi/debug/consul_mult_lilos | grep DIAG_
-```
-
-Com a placa rodando, leia o endereço que o `nm` deu:
-
-```bash
-probe-rs read b16 0x20000000 1 --chip GD32C231K8 --chip-description-path target-probe/GD32C231K8.yaml
-```
-
-Segure um botão e leia `DIAG_AD` algumas vezes para ter o valor dele.
-Para a faixa de repouso, religue a placa, não toque em nada e leia
-`DIAG_AD_MIN` e `DIAG_AD_MAX`.
-
-> O FWDGT estoura em 2,8 s. Se o `probe-rs` parar o núcleo para ler, a
-> placa reseta — leia rápido, ou use o modo de diagnóstico acima, que
-> não depende do debugger.
+1. Meça a tensão em **PA6** com e sem botão apertado. Se não mexer, o
+   problema é na placa (divisor, trilha, solda), não no firmware.
+2. Se a tensão mexe no pino mas nenhum canal acusa, confira o modo
+   analógico do PA6 em [placa.rs](src/placa.rs) e a habilitação do
+   periférico em [mcu/adc.rs](src/mcu/adc.rs).
 
 ---
 

@@ -116,8 +116,11 @@ fn main() -> ! {
     #[cfg(not(feature = "diag-botoes"))]
     let t_maquina = pin!(tarefas::maquina(&saidas, &entradas));
     #[cfg(feature = "diag-botoes")]
-    let t_maquina = pin!(tarefas::diagnostico_botoes(&saidas));
+    let t_maquina = pin!(tarefas::diagnostico_botoes(&saidas, &p.adc));
     let t_gravacao = pin!(tarefas::gravacao(&p.fmc));
+    // No build de bancada o watchdog fica de fora: assim o `probe-rs`
+    // pode parar o nucleo para ler memoria sem a placa resetar em 2,8 s.
+    #[cfg(not(feature = "diag-botoes"))]
     let t_watchdog = pin!(tarefas::watchdog(&p.fwdgt, &p.rcu));
 
     // ─── 9. Entrega o controle ao executor (nunca retorna) ───────────────────
@@ -129,6 +132,7 @@ fn main() -> ! {
             t_amostragem,
             t_maquina,
             t_gravacao,
+            #[cfg(not(feature = "diag-botoes"))]
             t_watchdog,
         ],
         lilos::exec::ALL_TASKS,

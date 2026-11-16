@@ -644,7 +644,8 @@ src/
 └── tarefas.rs         as 7 tarefas do lilos
 
 ferramentas/
-└── confere_contra_cpp.py   compara as tabelas com o firmware C++
+├── confere_contra_cpp.py   compara as tabelas com o firmware C++
+└── le_adc.py               le os canais do ADC da placa por SWD
 
 crates/gd32c2x1-pac/    PAC gerado por svd2rust (não editar)
 svd/                    SVD oficial da GigaDevice
@@ -881,16 +882,17 @@ Cerca de **28% dos 63 KB** de flash disponíveis.
 
 ### Build de bancada para os botões
 
-Se os botões do painel não responderem, há um build que troca a máquina
-de estados por um diagnóstico que descobre **em que escala o ADC está
-lendo** e mostra nos três LEDs — sem osciloscópio e sem debugger:
+Se os botões do painel não responderem, há um build que **varre os 16
+canais do ADC e pisca o número daquele que se move** quando um botão é
+apertado — sem osciloscópio e sem debugger:
 
 ```bash
 cargo run --release --features diag-botoes
 ```
 
-Os triacs ficam desligados o tempo todo. A tabela de padrões está em
-[src/diag.rs](src/diag.rs) e no
+Os triacs e o watchdog ficam de fora. Para os números exatos de todos
+os canais, `python -I ferramentas/le_adc.py` lê a placa por SWD e
+mostra uma tabela. Os detalhes estão em [src/diag.rs](src/diag.rs) e no
 [Roteiro de bancada](ROTEIRO_BANCADA.md#modo-de-diagnóstico-dos-botões).
 
 ---

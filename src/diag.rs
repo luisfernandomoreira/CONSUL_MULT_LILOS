@@ -128,3 +128,75 @@ pub fn amplitude() -> u16 {
         max.saturating_sub(min)
     }
 }
+
+// ═════════════════════════════════════════════════════════════════════════════
+// VARREDURA DE CANAIS (build de bancada)
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// Quantos canais a varredura cobre.
+pub const NUM_CANAIS: usize = 16;
+
+/// Última leitura de cada canal do ADC.
+#[no_mangle]
+pub static mut DIAG_CANAIS: [u16; NUM_CANAIS] = [0; NUM_CANAIS];
+
+/// Menor leitura vista em cada canal.
+#[no_mangle]
+pub static mut DIAG_CANAIS_MIN: [u16; NUM_CANAIS] = [u16::MAX; NUM_CANAIS];
+
+/// Maior leitura vista em cada canal.
+#[no_mangle]
+pub static mut DIAG_CANAIS_MAX: [u16; NUM_CANAIS] = [0; NUM_CANAIS];
+
+/// Guarda a leitura de um canal da varredura.
+#[cfg(feature = "diag-botoes")]
+pub fn registra_canal(canal: usize, valor: u16) {
+    if canal >= NUM_CANAIS {
+        return;
+    }
+    // SAFETY: escrita volátil num `static mut` que só a tarefa de
+    // diagnóstico escreve, em índice conferido acima.
+    unsafe {
+        let base = addr_of_mut!(DIAG_CANAIS) as *mut u16;
+        core::ptr::write_volatile(base.add(canal), valor);
+
+        let base_min = addr_of_mut!(DIAG_CANAIS_MIN) as *mut u16;
+        if valor < core::ptr::read_volatile(base_min.add(canal)) {
+            core::ptr::write_volatile(base_min.add(canal), valor);
+        }
+
+        let base_max = addr_of_mut!(DIAG_CANAIS_MAX) as *mut u16;
+        if valor > core::ptr::read_volatile(base_max.add(canal)) {
+            core::ptr::write_volatile(base_max.add(canal), valor);
+        }
+    }
+}
+
+/// O canal que mais variou desde a partida, se algum variou o bastante.
+///
+/// É assim que se descobre em que canal o PA6 realmente está: aperte um
+/// botão do painel e o divisor resistivo mexe a tensão **de um canal
+/// só** — esse é o certo. Os demais ficam parados no seu valor de
+/// repouso.
+#[cfg(feature = "diag-botoes")]
+pub fn canal_mais_ativo(variacao_minima: u16) -> Option<usize> {
+    let mut melhor: Option<(usize, u16)> = None;
+
+    for canal in 0..NUM_CANAIS {
+        // SAFETY: leituras voláteis em índice dentro do vetor.
+        let amplitude = unsafe {
+            let min = core::ptr::read_volatile((addr_of_mut!(DIAG_CANAIS_MIN) as *mut u16).add(canal));
+            let max = core::ptr::read_volatile((addr_of_mut!(DIAG_CANAIS_MAX) as *mut u16).add(canal));
+            max.saturating_sub(min)
+        };
+
+        if amplitude < variacao_minima {
+            continue;
+        }
+        if melhor.is_none_or(|(_, a)| amplitude > a) {
+            melhor = Some((canal, amplitude));
+        }
+    }
+
+    melhor.map(|(canal, _)| canal)
+}
