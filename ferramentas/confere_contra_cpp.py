@@ -462,32 +462,56 @@ for nome in ["REPOUSO", "FAIXA_PAUSE", "FAIXA_MAIS_SECAS", "FAIXA_ENXAGUE_DUPLO"
 # As faixas do ADC sao o UNICO lugar em que o porte divergiu de
 # proposito. Medido na bancada, o mesmo divisor resistivo le cerca de
 # 31 contagens abaixo no GD32: o repouso da 0 em vez de ~33, e o botao
-# de ON/OFF da 789 em vez de ~820. As faixas do Rust foram alargadas
-# para cobrir as duas escalas. Por isso aqui so comparamos e
-# explicamos, sem contar como falha.
+# de ON/OFF da 789 em vez de ~820. As faixas do Rust sao as do C++
+# DESLOCADAS desse tanto, mantendo a largura.
+#
+# (A primeira tentativa foi alargar as faixas para cobrir as duas
+# escalas. Deu defeito: a tensao sobe gradualmente quando o contato
+# fecha, e a faixa de Pausa alargada capturava a subida do Mais Secas,
+# desligando a maquina. Por isso: deslocar, nao alargar.)
+#
+# Aqui nao se exige igualdade. Exige-se o que precisa valer: as faixas
+# nao podem se sobrepor, a largura tem de ser a mesma do C++, e o
+# deslocamento tem de ser igual nas tres — se alguem mexer numa so,
+# isto acusa.
 print("\n=== FAIXAS DO ADC DOS BOTOES (divergencia esperada) ===")
 NOMES_FAIXAS = ["repouso", "PAUSA", "MAIS SECAS", "ENXAGUE DUPLO"]
+
 if len(faixas_cpp) == len(faixas_rs) == 4:
-    print("  %-14s %-14s %-14s" % ("faixa", "C++ (STM32)", "Rust (GD32)"))
+    print("  %-14s %-12s %-12s %-9s %s"
+          % ("faixa", "C++ (STM32)", "Rust (GD32)", "largura", "desloc"))
+    deslocamentos = []
     for nome, c, r in zip(NOMES_FAIXAS, faixas_cpp, faixas_rs):
-        igual = "iguais" if c == r else "alargada"
-        print("  %-14s %-14s %-14s %s"
-              % (nome, "%d..%d" % c, "%d..%d" % r, igual))
-    # O que precisa continuar valendo: as faixas do Rust nao podem se
-    # sobrepor, e precisam conter as do C++.
+        desloc = (r[0] + r[1]) // 2 - (c[0] + c[1]) // 2
+        if nome != "repouso":  # o repouso satura em zero, nao desloca
+            deslocamentos.append(desloc)
+        print("  %-14s %-12s %-12s %-9s %+d"
+              % (nome, "%d..%d" % c, "%d..%d" % r,
+                 "%d/%d" % (c[1] - c[0], r[1] - r[0]), desloc))
+
+    # 1. Sem sobreposicao entre faixas vizinhas — foi o que causou o
+    #    defeito do Mais Secas desligando a maquina.
     for i in range(3):
-        if faixas_rs[i][1] >= faixas_rs[i + 1][0]:
-            confere(
-                "faixas %s e %s se sobrepoem" % (NOMES_FAIXAS[i], NOMES_FAIXAS[i + 1]),
-                [True],
-                [False],
-            )
-    for nome, c, r in zip(NOMES_FAIXAS, faixas_cpp, faixas_rs):
         confere(
-            "faixa %s do Rust contem a do C++" % nome,
+            "folga entre %s e %s" % (NOMES_FAIXAS[i], NOMES_FAIXAS[i + 1]),
             [True],
-            [r[0] <= c[0] and r[1] >= c[1]],
+            [faixas_rs[i][1] < faixas_rs[i + 1][0]],
         )
+
+    # 2. Deslocar nao muda largura.
+    for nome, c, r in zip(NOMES_FAIXAS, faixas_cpp, faixas_rs):
+        if nome == "repouso":
+            continue
+        confere("largura da faixa %s" % nome, [c[1] - c[0]], [r[1] - r[0]])
+
+    # 3. O mesmo deslocamento nas tres faixas de botao.
+    confere(
+        "deslocamento igual nas tres faixas de botao",
+        [True],
+        [len(set(deslocamentos)) == 1],
+    )
+    if len(set(deslocamentos)) == 1:
+        print("  (deslocamento medido na placa: %+d contagens)" % deslocamentos[0])
 else:
     confere("4 faixas", faixas_cpp, faixas_rs)
 

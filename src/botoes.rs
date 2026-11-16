@@ -10,9 +10,9 @@
 //!
 //! ```text
 //!     0 ..  60   nenhum botão apertado (repouso)
-//!   764 .. 845   Pausa / ON-OFF
-//!   850 .. 907   Roupas Mais Secas
-//!   912 .. 987   Enxágue Duplo
+//!   764 .. 814   Pausa / ON-OFF        (medido: 789)
+//!   826 .. 876   Roupas Mais Secas     (medido: ~851)
+//!   906 .. 956   Enxágue Duplo         (medido: ~931)
 //! ```
 //!
 //! Valores fora de todas as faixas são ignorados: é o que acontece no
@@ -35,12 +35,29 @@
 //! funcionava — só o modelo 6 revelava isso, porque é o único que
 //! depende do botão para retomar depois da tampa.
 //!
-//! As faixas abaixo foram **alargadas**, não deslocadas: cobrem o
-//! valor medido no GD32 e também o do C++, para a mesma imagem servir
-//! se outra placa ler na escala antiga. Os limites de `MAIS_SECAS` e
-//! `ENXAGUE_DUPLO` ainda são inferidos do mesmo deslocamento — o
-//! build `--features diag-botoes` grava os patamares de cada botão
-//! para confirmar.
+//! As faixas abaixo são as do C++ **deslocadas** de 31, mantendo a
+//! largura de ±25 do original.
+//!
+//! ─── Por que não alargar em vez de deslocar ──────────────────
+//!
+//! A primeira tentativa foi alargar as faixas para cobrir as duas
+//! escalas, o que gerou um defeito pior: apertar *Mais Secas*
+//! desligava a máquina de vez em quando.
+//!
+//! O motivo é que a tensão **sobe gradualmente** quando o contato
+//! fecha. Indo de 0 a ~851, ela atravessa a faixa de Pausa no caminho;
+//! com a faixa de Pausa alargada até 845, uma amostra caindo nesse
+//! instante virava Pausa — e Pausa com a máquina ligada desliga o
+//! ciclo.
+//!
+//! Com as faixas estreitas e centradas, a travessia cai nas **folgas**
+//! entre elas, que não acionam nada. Além disso,
+//! `tarefas::amostragem` só publica uma leitura depois de ela se
+//! repetir: uma amostra isolada no meio da subida é descartada.
+//!
+//! Os valores de `MAIS_SECAS` e `ENXAGUE_DUPLO` ainda são inferidos do
+//! mesmo deslocamento — o build `--features diag-botoes` grava os
+//! patamares de cada botão para confirmar.
 
 /// Qual botão o valor do ADC representa.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -59,12 +76,12 @@ pub enum Botao {
 /// em repouso, e um limite inferior acima disso impede o ferrolho de
 /// armar — nenhum botão funciona.
 const REPOUSO: (u16, u16) = (0, 60);
-/// Medido: 789 no GD32. No C++: 795..845.
-const FAIXA_PAUSE: (u16, u16) = (764, 845);
-/// Inferido do mesmo deslocamento: ~851. No C++: 857..907.
-const FAIXA_MAIS_SECAS: (u16, u16) = (850, 907);
-/// Inferido do mesmo deslocamento: ~931. No C++: 937..987.
-const FAIXA_ENXAGUE_DUPLO: (u16, u16) = (912, 987);
+/// Centro medido na placa: **789**. No C++ era 795..845.
+const FAIXA_PAUSE: (u16, u16) = (764, 814);
+/// Centro inferido do mesmo deslocamento: **~851**. No C++: 857..907.
+const FAIXA_MAIS_SECAS: (u16, u16) = (826, 876);
+/// Centro inferido do mesmo deslocamento: **~931**. No C++: 937..987.
+const FAIXA_ENXAGUE_DUPLO: (u16, u16) = (906, 956);
 
 #[inline]
 fn dentro(valor: u16, faixa: (u16, u16)) -> bool {

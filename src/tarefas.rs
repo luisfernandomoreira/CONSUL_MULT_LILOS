@@ -167,10 +167,20 @@ impl FiltroPressostato {
     }
 }
 
+/// Quanto duas leituras podem diferir e ainda contarem como a mesma.
+///
+/// Serve para descartar a amostra solitária que cai no meio da subida
+/// de tensão de um botão. Sem isso, apertar *Mais Secas* às vezes era
+/// lido como *Pausa* — e Pausa desliga a máquina. Ver `botoes.rs`.
+const TOLERANCIA_AD: u16 = 20;
+
 /// Lê o seletor, os botões e o pressostato a cada 81 ms.
 pub async fn amostragem(e: &Entradas, adc_periferico: &Adc) -> Infallible {
     let mut detector = DetectorMudanca::novo(e.trilhas_encoder());
     let mut pressostato = FiltroPressostato::novo(e.pressostato());
+
+    // Última leitura crua do ADC, para confirmar a próxima.
+    let mut ad_anterior: Option<u16> = None;
 
     let mut gate = PeriodicGate::from(Millis(AMOSTRAGEM_MS));
     loop {
@@ -184,10 +194,23 @@ pub async fn amostragem(e: &Entradas, adc_periferico: &Adc) -> Infallible {
 
         // Botões do painel, pelo divisor resistivo em PA6. Se o ADC não
         // responder, mantém a última leitura boa.
+        //
+        // A leitura só é publicada depois de **se repetir**: quando um
+        // contato fecha, a tensão sobe gradualmente, e uma amostra
+        // isolada no meio dessa subida pode cair na faixa de outro
+        // botão. Duas leituras iguais seguidas significam patamar, não
+        // travessia.
         match adc::converte(adc_periferico) {
             Some(valor) => {
-                leituras::set_ad(valor);
                 diag::registra_leitura(valor);
+
+                let estavel = ad_anterior
+                    .map(|anterior| valor.abs_diff(anterior) <= TOLERANCIA_AD)
+                    .unwrap_or(false);
+                if estavel {
+                    leituras::set_ad(valor);
+                }
+                ad_anterior = Some(valor);
             }
             None => diag::registra_falha(),
         }

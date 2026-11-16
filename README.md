@@ -710,11 +710,29 @@ cai nessa faixa. Lendo `0`, **nunca armava**, e nenhum botão funcionava.
 E só o **modelo 6** revelava isso, porque é o único que depende do botão
 para retomar depois da tampa — nos outros a retomada é automática.
 
-As faixas de [botoes.rs](src/botoes.rs) foram **alargadas** (não
-deslocadas), para cobrir as duas escalas. O
-`ferramentas/confere_contra_cpp.py` sabe dessa divergência: mostra as
-duas lado a lado e confere que as novas não se sobrepõem e contêm as
-antigas.
+As faixas de [botoes.rs](src/botoes.rs) são as do C++ **deslocadas** de
+31, com a mesma largura de ±25.
+
+A primeira tentativa foi *alargar* as faixas para cobrir as duas
+escalas, e isso criou um defeito pior: apertar *Mais Secas* desligava a
+máquina de vez em quando. O motivo é que a tensão **sobe
+gradualmente** quando o contato fecha — indo de 0 a ~851, ela atravessa
+a faixa de Pausa no caminho, e com a faixa de Pausa alargada até 845
+uma amostra caindo nesse instante virava Pausa. Pausa com a máquina
+ligada desliga o ciclo.
+
+Duas coisas resolveram:
+
+* **Faixas estreitas e centradas**, para a travessia cair nas folgas
+  entre elas, que não acionam nada;
+* **Confirmação da leitura** em `tarefas::amostragem`: um valor só é
+  publicado depois de se repetir, então a amostra solitária no meio da
+  subida é descartada.
+
+O `ferramentas/confere_contra_cpp.py` sabe dessa divergência e a trata
+como esperada: mostra as duas escalas lado a lado e confere o que
+precisa valer — faixas sem sobreposição, largura igual à do C++ e o
+mesmo deslocamento nas três.
 
 Sobrou um ponto aberto, que não é do ADC:
 
