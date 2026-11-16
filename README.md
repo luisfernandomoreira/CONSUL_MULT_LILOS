@@ -6,6 +6,30 @@ com uma arquitetura **baseada em eventos**.
 
 A placa é a mesma. Só mudou o microcontrolador.
 
+---
+
+## Estado atual do porte CONSUL MULT
+
+A **infraestrutura** já está portada e compilando para o GD32C231K8T6:
+
+| Camada | Arquivo | Situação |
+|---|---|---|
+| PAC | `crates/gd32c2x1-pac/` | pronto (svd2rust, SVD oficial GigaDevice) |
+| Clock / GPIO / FWDGT / FMC | `src/mcu/` | pronto |
+| Fila de eventos | `src/evento.rs` | pronto (a lista de botões ainda é a do BWG10) |
+| Tarefas lilos | `src/tarefas.rs` | pronto |
+| Mapa de pinos | `src/placa.rs` | pronto (mesma PCI — conferir contra o C++) |
+| Máquina de estados | `src/maquina.rs` | **herdada do BWG10** — a ser substituída |
+| Ciclos de lavagem | `src/programa.rs` | **herdada do BWG10** — a ser substituída |
+| Padrão de agitação | `src/agitacao.rs` | **herdada do BWG10** — a ser substituída |
+| Opções do painel | `src/opcoes.rs` | **herdada do BWG10** — a ser substituída |
+
+A lógica marcada como herdada vem do firmware do BWG10 e serve de
+andaime: o projeto já grava e roda na placa. Ela será reescrita a partir
+do firmware C++ da CONSUL MULT (botões, LEDs, tempos e etapas de ciclo).
+
+---
+
 > Atendendo a máquina em campo? Vá direto ao
 > **[Apêndice — Manual do técnico](#apêndice--manual-do-técnico-em-campo)**:
 > proteções, códigos de erro piscados e auto-teste, autocontido e sem
