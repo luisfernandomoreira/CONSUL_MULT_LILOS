@@ -1,0 +1,11 @@
+target/
+**/*.rs.bk
+*.hex
+*.bin
+/conferir
+/conferir.exe
+/conferir.pdb
+/simular
+/simular.exe
+/simular.pdb
+svd/*.corrigido.svd

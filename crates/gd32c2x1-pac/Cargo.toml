@@ -1,0 +1,27 @@
+# PAC (Peripheral Access Crate) do GD32C231, gerado por svd2rust + form
+# a partir de svd/GD32C231.svd (extraído do pack oficial da GigaDevice).
+#
+# O conteúdo de src/ e device.x é GERADO — não edite à mão.
+# Para regerar, veja svd/README.md.
+[package]
+name = "gd32c2x1-pac"
+version = "0.1.0"
+edition = "2021"
+description = "Peripheral Access Crate para GD32C231 (gerado por svd2rust 0.37)"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+cortex-m = "0.7"
+vcell = "0.1"
+critical-section = { version = "1", optional = true }
+
+[dependencies.cortex-m-rt]
+version = "0.7"
+optional = true
+
+[features]
+# 'rt' habilita a tabela de vetores de interrupção (device.x).
+rt = ["cortex-m-rt"]
+# 'critical-section' faz Peripherals::take() usar uma seção crítica,
+# necessário no thumbv6m, que não tem CAS atômico.
+critical-section = ["dep:critical-section"]

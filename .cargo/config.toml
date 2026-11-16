@@ -1,0 +1,26 @@
+# ─────────────────────────────────────────────────────────────
+# O GD32C231K8T6 tem núcleo Cortex-M23 (ARMv8-M Baseline).
+# Compilamos para thumbv6m-none-eabi (ARMv6-M) porque:
+#   • o Cortex-M23 executa código ARMv6-M nativamente;
+#   • o crate `lilos` 1.3 ainda não reconhece thumbv8m.base
+#     no seu build.rs (veja README → "Alvo de compilação").
+#
+# Os outros projetos GD32 daqui (BRM35, BRM40, BWC07) usam
+# thumbv8m.base porque são RTIC, não lilos.
+# ─────────────────────────────────────────────────────────────
+[build]
+target = "thumbv6m-none-eabi"
+
+[target.thumbv6m-none-eabi]
+rustflags = [
+    "-C", "link-arg=-Tlink.x",
+    "-C", "link-arg=--nmagic", # sem alinhamento de página no ELF
+]
+
+# O probe-rs 0.31 não tem target integrado para o GD32C231K8T6.
+# `target-probe/GD32C231K8.yaml` é o mesmo arquivo usado nos outros
+# projetos GD32 daqui, gerado do GigaDevice.GD32C2x1_DFP.1.1.0.pack
+# com o algoritmo oficial Flash/GD32C231_64K.FLM.
+#
+# O caminho é relativo: rode `cargo run` a partir da raiz do projeto.
+runner = "probe-rs run --chip GD32C231K8 --chip-description-path target-probe/GD32C231K8.yaml"

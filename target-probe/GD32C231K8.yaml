@@ -1,0 +1,58 @@
+# Target probe-rs para o GD32C231K8T6 (Cortex-M23, 64 KiB flash, 12 KiB SRAM).
+# Gerado do GigaDevice.GD32C2x1_DFP.1.1.0.pack com target-gen 0.31.0:
+# variante GD32C231K8 + algoritmo oficial Flash/GD32C231_64K.FLM (o mesmo que o .pdsc indica).
+name: GD32C231K8
+generated_from_pack: true
+pack_file_release: 1.1.0
+variants:
+- name: GD32C231K8
+  cores:
+  - name: main
+    type: armv8m
+    core_access_options: !Arm
+      ap: !v1 0
+  memory_map:
+  - !Nvm
+    name: IROM1
+    range:
+      start: 0x8000000
+      end: 0x8010000
+    cores:
+    - main
+    access:
+      write: false
+      boot: true
+  - !Ram
+    name: IRAM1
+    range:
+      start: 0x20000000
+      end: 0x20003000
+    cores:
+    - main
+  flash_algorithms:
+  - gd32c231_64k
+flash_algorithms:
+- name: gd32c231_64k
+  description: GD32C231_64K
+  default: true
+  instructions: hLABRgOQA5gfItIGgBgBkAGYgAoCkAKYAJEEsHBHwEawtYawE0YMRgVGBZAEkQOSFkgXSQFgF0kBYBdIAGjAAwAoApMBlACVCtT/5xNIFEkBYBRIBiEBYBNIFEkBYP/nDUgAaAADACgH1P/nEEgRSQFgEUh/IQFg/+cQSAFoCCIRQwFgACAGsLC9wEYIIAJAIwFnRauJ780gIAJAADAAQFVVAAAEMABACDAAQP8PAAAELABAfwECAAAsAEAQIAJAgrABRgGQBUgCaAEj2wcaQwJgACAAkQKwcEfARhQgAkASSAFoBCIRQwFgAWgBIhIEEUMBYP/nDkgAaMADACgO1f/nDEgMSQFgDEgAaAADACgE1P/nCkh/IQFg/+fr5wNIAWgEIpFDAWAAIHBHFCACQBAgAkAAMABAqqoAACAgAkAALABAgLWEsAFGApACmACR//dW/wGQJEgBaEDy+BKRQwFgAWgCIhFDAWABmYkGyQ0CaApDAmABaAEiEgQRQwFg/+caSABowAMAKA7V/+cYSBhJAWAYSABoAAMAKATU/+cWSH8hAWD/5+vnD0gBaEDy+BKRQwFgAWgCIpFDAWALSABo0CEIQgjQ/+cISAFo0CIRQwFgASADkALgACADkP/nA5gEsIC9wEYUIAJAECACQAAwAECqqgAAICACQAAsAECwtYewE0YMRgVGBZAEkQOSBJjAHQchiEMEkAKTAZQAlf/nBJgAKEDQ/+cnSAFoASIRQwFgA5gAaAWZCGADmEBoBZlIYP/nIUgAaMADACgO1f/nH0gfSQFgH0gAaAADACgE1P/nHUh/IQFg/+fr5xZIAWgBIpFDAWAUSABogAZADwAoCND/5xFIAWg4IhFDAWABIAaQEuAFmAgwBZADmAgwA5AEmAg4BJC75wZIAWgBIhIEkUMBYAAgBpD/5waYB7CwvcBGACACQBQgAkAQIAJAADAAQKqqAAAgIAJAACwAQAAAAAA=
+  pc_init: 0x21
+  pc_uninit: 0xc1
+  pc_program_page: 0x201
+  pc_erase_sector: 0x145
+  pc_erase_all: 0xe1
+  data_section_offset: 0x2e0
+  rtt_poll_interval: 0
+  flash_properties:
+    address_range:
+      start: 0x8000000
+      end: 0x8010000
+    page_size: 0x400
+    erased_byte_value: 0xff
+    program_page_timeout: 100
+    erase_sector_timeout: 3000
+    sectors:
+    - size: 0x400
+      address: 0x0
+  cores:
+  - main
