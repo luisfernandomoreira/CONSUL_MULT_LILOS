@@ -197,9 +197,70 @@ rearma quando o painel volta ao repouso.
 | Resposta **errática** | clock do ADC ou tempo de amostragem | `SPT_MAIS_LONGO` e `RCU_CFG1.ADCSEL/ADCPSC` |
 | Nada, nem errático | canal errado | `CANAL_BOTOES` em [mcu/adc.rs](src/mcu/adc.rs) |
 
-Se precisar ver o número cru do ADC, me avise: dá para pôr um modo de
-diagnóstico que pisca o valor nos três LEDs, ou ler direto com o
-`probe-rs` parando o núcleo.
+### Modo de diagnóstico dos botões
+
+Se o teste acima falhar, existe um build de bancada que mostra nos
+próprios LEDs o que o ADC está lendo — sem osciloscópio, sem debugger:
+
+```bash
+cargo run --release --features diag-botoes
+```
+
+Ele troca a máquina de estados por um diagnóstico. **Os triacs ficam
+desligados o tempo todo**, então pode rodar sem água e sem carga.
+
+| Padrão dos LEDs | Significa |
+|-----------------|-----------|
+| todos apagados | repouso (7..60) — o ADC está bom |
+| só o LED de ON/OFF aceso | botão **Pausa** reconhecido |
+| só o LED de mais secas aceso | botão **Mais Secas** reconhecido |
+| só o LED de enxágue duplo aceso | botão **Enxágue Duplo** reconhecido |
+| os três piscando juntos | valor **fora de todas as faixas** |
+| o LED de ON/OFF piscando sozinho | o ADC **não está convertendo** |
+
+Os dois últimos são os casos de defeito, e são bem diferentes:
+
+* **Fora de todas as faixas** — o ADC lê, mas o número não cai em
+  nenhuma janela de [botoes.rs](src/botoes.rs). É resolução (12 bits em
+  vez de 10) ou o divisor resistivo.
+* **Não está convertendo** — a conversão nem termina. É canal, clock ou
+  habilitação do periférico em [mcu/adc.rs](src/mcu/adc.rs).
+
+Com o diagnóstico rodando, aperte um botão de cada vez e veja em que
+caso cai. Depois volte ao build normal:
+
+```bash
+cargo run --release
+```
+
+### Ver o número exato pelo SWD
+
+Para o valor cru, o firmware deixa cinco contadores em RAM com símbolo
+fixo: `DIAG_AD`, `DIAG_AD_MIN`, `DIAG_AD_MAX`, `DIAG_ADC_OK` e
+`DIAG_ADC_FALHA`. O perfil release apaga os símbolos, então levante os
+endereços no build de depuração, que tem a mesma otimização:
+
+```bash
+cargo build
+```
+
+```bash
+arm-none-eabi-nm target/thumbv6m-none-eabi/debug/consul_mult_lilos | grep DIAG_
+```
+
+Com a placa rodando, leia o endereço que o `nm` deu:
+
+```bash
+probe-rs read b16 0x20000000 1 --chip GD32C231K8 --chip-description-path target-probe/GD32C231K8.yaml
+```
+
+Segure um botão e leia `DIAG_AD` algumas vezes para ter o valor dele.
+Para a faixa de repouso, religue a placa, não toque em nada e leia
+`DIAG_AD_MIN` e `DIAG_AD_MAX`.
+
+> O FWDGT estoura em 2,8 s. Se o `probe-rs` parar o núcleo para ler, a
+> placa reseta — leia rápido, ou use o modo de diagnóstico acima, que
+> não depende do debugger.
 
 ---
 

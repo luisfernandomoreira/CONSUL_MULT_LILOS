@@ -26,6 +26,12 @@ cortex-m-rt = "0.7"
 critical-section = "1"
 panic-halt = "0.2"
 
+[features]
+# Build de bancada: troca a maquina de estados por um diagnostico que
+# mostra nos tres LEDs o que o ADC dos botoes esta lendo. Nao entra na
+# imagem de producao. Veja src/diag.rs.
+diag-botoes = []
+
 [profile.dev]
 opt-level = "z"
 lto = true

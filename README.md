@@ -633,6 +633,7 @@ src/
 ├── modelo.rs          chave SW1..SW4 → modelo 1..8
 ├── encoder.rs         4 trilhas → programa 0..15
 ├── botoes.rs          faixas de ADC → qual botão
+├── diag.rs            diagnóstico do ADC (build de bancada)
 ├── relogio.rs         contador de segundos do ciclo
 ├── agita.rs           padrões de vai-e-vem do motor
 ├── tabelas.rs         tempos de cada programa, por modelo
@@ -873,10 +874,24 @@ $objcopy = Get-ChildItem (rustc --print sysroot) -Recurse -Filter llvm-objcopy.e
 
 ```text
    text    data     bss     dec     hex
-  17816       4      72   17892    45e4
+  17856       8      80   17944    4618
 ```
 
 Cerca de **28% dos 63 KB** de flash disponíveis.
+
+### Build de bancada para os botões
+
+Se os botões do painel não responderem, há um build que troca a máquina
+de estados por um diagnóstico que mostra nos três LEDs o que o ADC está
+lendo — sem osciloscópio e sem debugger:
+
+```bash
+cargo run --release --features diag-botoes
+```
+
+Os triacs ficam desligados o tempo todo. A tabela de padrões está em
+[src/diag.rs](src/diag.rs) e no
+[Roteiro de bancada](ROTEIRO_BANCADA.md#modo-de-diagnóstico-dos-botões).
 
 ---
 

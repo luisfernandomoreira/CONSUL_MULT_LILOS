@@ -40,6 +40,10 @@
 
 #![no_std]
 #![no_main]
+// No build de bancada (`--features diag-botoes`) a maquina de estados
+// nao e instanciada de proposito: o diagnostico dos botoes entra no
+// lugar dela. Todo o ciclo fica sem uso, e isso nao e aviso util.
+#![cfg_attr(feature = "diag-botoes", allow(dead_code))]
 
 use panic_halt as _; // panic → trava o núcleo; o FWDGT reinicia em 2,8 s
 
@@ -48,6 +52,7 @@ use cortex_m_rt::entry;
 
 mod agita;
 mod botoes;
+mod diag;
 mod encoder;
 mod estado_salvo;
 mod evento;
@@ -106,7 +111,12 @@ fn main() -> ! {
     let t_agitacao = pin!(tarefas::agitacao());
     let t_tampa = pin!(tarefas::tampa(&entradas));
     let t_amostragem = pin!(tarefas::amostragem(&entradas, &p.adc));
+    // Build de bancada (`--features diag-botoes`): o diagnostico dos
+    // botoes entra no lugar da maquina de estados. Veja src/diag.rs.
+    #[cfg(not(feature = "diag-botoes"))]
     let t_maquina = pin!(tarefas::maquina(&saidas, &entradas));
+    #[cfg(feature = "diag-botoes")]
+    let t_maquina = pin!(tarefas::diagnostico_botoes(&saidas));
     let t_gravacao = pin!(tarefas::gravacao(&p.fmc));
     let t_watchdog = pin!(tarefas::watchdog(&p.fwdgt, &p.rcu));
 

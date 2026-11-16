@@ -20,6 +20,7 @@ use core::convert::Infallible;
 
 use lilos::time::{sleep_for, Millis, PeriodicGate};
 
+use crate::diag;
 use crate::encoder::{self, DetectorMudanca};
 use crate::estado_salvo;
 use crate::evento;
@@ -183,8 +184,12 @@ pub async fn amostragem(e: &Entradas, adc_periferico: &Adc) -> Infallible {
 
         // Botões do painel, pelo divisor resistivo em PA6. Se o ADC não
         // responder, mantém a última leitura boa.
-        if let Some(valor) = adc::converte(adc_periferico) {
-            leituras::set_ad(valor);
+        match adc::converte(adc_periferico) {
+            Some(valor) => {
+                leituras::set_ad(valor);
+                diag::registra_leitura(valor);
+            }
+            None => diag::registra_falha(),
         }
 
         // Pressostato: filtra e inverte — nível baixo significa cheio.
@@ -269,5 +274,109 @@ pub async fn watchdog(wdt_periferico: &Fwdgt, rcu: &Rcu) -> Infallible {
     loop {
         gate.next_time().await;
         wdt::alimenta(wdt_periferico);
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// TAREFA: DIAGNOSTICO DOS BOTOES (build de bancada)
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// Mostra nos tres LEDs o que o ADC dos botoes esta lendo.
+///
+/// Entra no lugar da maquina de estados quando o firmware e compilado
+/// com a feature `diag-botoes`:
+///
+/// ```bash
+/// cargo run --release --features diag-botoes
+/// ```
+///
+/// Os triacs ficam desligados o tempo todo — da para rodar com a placa
+/// na bancada, sem agua e sem carga.
+///
+/// | Padrao dos LEDs | Significa |
+/// |---|---|
+/// | todos apagados | repouso (7..60) — o ADC esta bom |
+/// | so o LED de ON/OFF aceso | botao **Pausa** reconhecido |
+/// | so o LED de mais secas aceso | botao **Mais Secas** reconhecido |
+/// | so o LED de enxague duplo aceso | botao **Enxague Duplo** reconhecido |
+/// | os tres piscando juntos | valor **fora de todas as faixas** |
+/// | o LED de ON/OFF piscando sozinho | o ADC **nao esta convertendo** |
+///
+/// Os dois ultimos sao os casos de defeito, e sao bem diferentes:
+/// "fora das faixas" quer dizer que o ADC le, mas o numero nao cai em
+/// nenhuma janela de `botoes.rs` (resolucao ou divisor); "nao esta
+/// convertendo" quer dizer que a conversao nem termina (canal, clock
+/// ou habilitacao do periferico).
+#[cfg(feature = "diag-botoes")]
+pub async fn diagnostico_botoes(s: &Saidas) -> Infallible {
+    use crate::botoes::Botao;
+
+    const PERIODO_MS: u64 = 100;
+    /// Quantas passadas sem o contador de conversoes andar para
+    /// declarar o ADC parado (~1 s).
+    const PACIENCIA: u8 = 10;
+
+    s.desliga_todos_triacs();
+    s.apaga_leds();
+
+    let mut ultimo_ok = diag::conversoes_ok();
+    let mut paradas: u8 = 0;
+    let mut pisca = false;
+
+    let mut gate = PeriodicGate::from(Millis(PERIODO_MS));
+    loop {
+        gate.next_time().await;
+
+        // Os triacs nunca ligam neste modo.
+        s.desliga_todos_triacs();
+        pisca = !pisca;
+
+        // O ADC esta convertendo?
+        let ok = diag::conversoes_ok();
+        if ok == ultimo_ok {
+            paradas = paradas.saturating_add(1);
+        } else {
+            paradas = 0;
+            ultimo_ok = ok;
+        }
+
+        if paradas >= PACIENCIA {
+            // ADC parado: so o LED de ON/OFF pisca.
+            s.led_pause(pisca);
+            s.led_mais_secas(false);
+            s.led_enxague_duplo(false);
+            continue;
+        }
+
+        let ad = leituras::ad();
+
+        if crate::botoes::em_repouso(ad) {
+            s.apaga_leds();
+            continue;
+        }
+
+        match crate::botoes::identifica(ad) {
+            Some(Botao::Pause) => {
+                s.led_pause(true);
+                s.led_mais_secas(false);
+                s.led_enxague_duplo(false);
+            }
+            Some(Botao::MaisSecas) => {
+                s.led_pause(false);
+                s.led_mais_secas(true);
+                s.led_enxague_duplo(false);
+            }
+            Some(Botao::EnxagueDuplo) => {
+                s.led_pause(false);
+                s.led_mais_secas(false);
+                s.led_enxague_duplo(true);
+            }
+            // Fora de todas as faixas: os tres piscam juntos.
+            None => {
+                s.led_pause(pisca);
+                s.led_mais_secas(pisca);
+                s.led_enxague_duplo(pisca);
+            }
+        }
     }
 }
