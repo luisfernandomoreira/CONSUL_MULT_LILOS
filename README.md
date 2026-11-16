@@ -370,6 +370,27 @@ O `memory.x` reserva essa página deixando o código em **63 KB**.
 
 ## 10. Compilar e gravar
 
+### Conferir contra o C++ antes de gravar (sem placa)
+
+As tabelas e o mapa de pinos foram transcritos do firmware C++ à mão —
+são centenas de números. `ferramentas/confere_contra_cpp.py` lê os dois
+projetos e compara valor por valor:
+
+```bash
+python -I ferramentas/confere_contra_cpp.py
+```
+
+São 45 checagens: tempos de agitação e molho dos 6 modelos, ciclo
+turbo, lavagem econômica, os 4 padrões de vai-e-vem, as fases de
+drenagem e de centrifugação, o mapa das 16 posições do encoder, os 21
+pinos, a chave de modelo e as faixas do ADC dos botões. Sai com código
+1 se achar qualquer divergência.
+
+Ele espera o projeto C++ em `../CONSUL_MULT_CUBE/CONSUL_MULT_V1`; se
+estiver em outro lugar, passe o caminho da pasta `Core/Src` como
+argumento. Rode isto depois de mexer em [tabelas.rs](src/tabelas.rs),
+[placa.rs](src/placa.rs) ou [agita.rs](src/agita.rs).
+
 ### Preparar o ambiente (uma vez)
 
 ```bash
