@@ -309,6 +309,40 @@ Anote `VREFINT` e os patamares dos botões em **duas ou três placas**:
 Vale fazer uma vez, nas primeiras placas da série. Dando o segundo
 caso, a dúvida está encerrada para sempre.
 
+#### O procedimento, na segunda placa
+
+A normalização **já está ligada** (`VREFINT_REFERENCIA = 376`, medido na
+primeira placa). Então o que falta é só confirmar qual dos três casos
+acima é o verdadeiro.
+
+1. Grave a segunda placa com o **build de bancada** — o release apaga
+   os símbolos, e o script precisa deles:
+
+   ```bash
+   cargo run --features diag-botoes
+   ```
+
+2. Aperte e **segure** cada botão por ~1 s, um por vez.
+
+3. Encerre o `cargo run` (Ctrl-C, para liberar o gravador) e rode:
+
+   ```bash
+   python -I ferramentas/le_adc.py
+   ```
+
+4. Anote **VREFINT** e os **três patamares** e compare com a primeira
+   placa:
+
+   | Primeira placa | Segunda placa | |
+   |----------------|---------------|---|
+   | VREFINT 376 | **igual** | as fontes são iguais; o teste não conclui nada — tente uma terceira |
+   | patamares 789 / 849 / 931 | VREFINT **muda**, patamares **iguais** | **ratiométrico** — dúvida encerrada, e dá para desligar a normalização pondo `VREFINT_REFERENCIA = 0` |
+   | | VREFINT **muda**, patamares **mudam junto** | o divisor não acompanha a fonte: a normalização está certa e o limite de 1,5% pode subir |
+
+O caso do meio é o mais provável, pelo que os dados já mostram. Nele a
+normalização passa a ser peso morto — não atrapalha, por causa do
+limite, mas também não serve.
+
 #### O log das últimas 64 leituras
 
 Para ver a sequência de valores em volta de um aperto:
