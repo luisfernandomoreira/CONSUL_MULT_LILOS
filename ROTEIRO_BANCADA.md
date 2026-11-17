@@ -126,6 +126,12 @@ nenhum triac piscar no boot. Este passo verifica isso.
 
 ## 5. Auto-teste de linha — uma saída por vez
 
+> **O auto-teste NÃO checa a tampa.** É de propósito — o teste existe
+> para você observar cada atuador, e isso em geral exige a tampa
+> aberta. Mas significa que o passo 4 **gira o motor com a tampa
+> aberta**: não ponha a mão no cesto durante o auto-teste, e lembre que
+> essa é a única situação em que a proteção de tampa não vale.
+
 A chave no modelo 7 roda o auto-teste do firmware. **Cada giro do
 encoder avança um passo.** Cada passo desliga as saídas do anterior
 antes de ligar a sua, então nunca há duas acionadas juntas.

@@ -556,6 +556,12 @@ Os três LEDs piscam num padrão de 8 passos a cada 301 ms, para se
 distinguir de qualquer outro estado. É o teste usado em bancada — ver o
 [Roteiro de bancada](ROTEIRO_BANCADA.md).
 
+> **O auto-teste é a única etapa que não checa a tampa**, e isso vem do
+> firmware C++. É coerente com o propósito: o teste existe para
+> observar cada atuador, o que em geral exige a tampa aberta. Mas o
+> passo 4 gira o motor nessas condições — é modo de fábrica, não de
+> campo.
+
 ### A agitação
 
 O agitador alterna entre dois sentidos numa cadência que define a
@@ -577,8 +583,14 @@ Os números são contagens do contador de 21 ms. O padrão **Padrão**, por
 exemplo, dá motor A por ~0,29 s, pausa de ~0,44 s, motor C por ~0,29 s
 e pausa de ~0,44 s.
 
-Os dois sentidos **nunca** ficam ligados juntos: ligar um desliga o
-outro antes, na mesma função ([agita.rs](src/agita.rs)).
+Os dois sentidos **nunca** ficam ligados juntos, e a trava mora em
+[placa.rs](src/placa.rs), não em quem chama: `motor_a` desliga o C
+antes de ligar, e `motor_c` desliga o A.
+
+Isso importa porque `motor_pulse` — os pulsos da drenagem e da
+centrifugação — é chamado direto pelas fases, longe do `agita`. Com a
+trava no driver, "os dois sentidos ligados" deixa de ser representável,
+em vez de depender de cada etapa lembrar de cortar antes.
 
 Qual padrão sai depende do modelo, do programa e da etapa — são quatro
 funções de escolha em `agita.rs`, uma por contexto (`etapa_agitar`,

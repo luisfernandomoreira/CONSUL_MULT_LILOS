@@ -124,19 +124,41 @@ impl Saidas {
         self.valvula_sabao.escreve(nivel(abrir));
     }
 
+    /// Motor no sentido A. Desliga o sentido C antes.
+    ///
+    /// ─── A trava de sentido ──────────────────────────────────────
+    ///
+    /// A e C sao os dois sentidos do MESMO motor. Ligar os dois ao
+    /// mesmo tempo e uma reversao com os dois triacs conduzindo, e e
+    /// por isso que o desligamento do outro sentido mora **aqui**, e
+    /// nao em quem chama.
+    ///
+    /// Nao e paranoia: `motor_pulse` e chamado direto pelas fases de
+    /// drenagem e de centrifugacao, longe do `agita`, que tem a sua
+    /// propria troca de sentido. Hoje nenhum caminho chega nessas
+    /// fases com o sentido A ligado — mas isso depende de cada etapa
+    /// lembrar de cortar antes. Com a trava aqui, "os dois ligados"
+    /// deixa de ser representavel.
     pub fn motor_a(&self, ligar: bool) {
+        if ligar {
+            self.motor_c.escreve(DESLIGADO);
+        }
         self.motor_a.escreve(nivel(ligar));
     }
 
-    /// Motor em centrifugação. **Mesmo pino do `motor_pulse`.**
+    /// Motor em centrifugação. Desliga o sentido A antes.
+    /// **Mesmo pino do `motor_pulse`.**
     pub fn motor_c(&self, ligar: bool) {
+        if ligar {
+            self.motor_a.escreve(DESLIGADO);
+        }
         self.motor_c.escreve(nivel(ligar));
     }
 
     /// Pulso de motor usado na drenagem e na centrifugação.
-    /// **Mesmo pino do `motor_c`.**
+    /// **Mesmo pino do `motor_c`**, e com a mesma trava de sentido.
     pub fn motor_pulse(&self, ligar: bool) {
-        self.motor_c.escreve(nivel(ligar));
+        self.motor_c(ligar);
     }
 
     /// Desliga todos os triacs. Chamada no boot, ao abrir a tampa, ao
