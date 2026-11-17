@@ -293,6 +293,19 @@ impl<'a> Maquina<'a> {
     /// É o par `selecionaProgramasDeLavagem()` + `ExecutarEtapa()` do
     /// laço `while(1)` do firmware C++.
     pub async fn passo(&mut self) {
+        // A falha de flash também deve interromper saídas já ligadas,
+        // inclusive no auto-teste. Ao recuperar, refaz a estabilização.
+        if estado_salvo::falhou() {
+            self.s.desliga_todos_triacs();
+            agita::liga_timer(false);
+            relogio::liga(false);
+            relogio::reset_atrasos();
+            self.tampa_fechada = false;
+            self.interface_erro = true;
+            self.limite_tempo(true).await;
+            return;
+        }
+
         self.nivel_agua = leituras::nivel_agua();
 
         // Girou o seletor? No auto-teste avança o passo do teste; fora

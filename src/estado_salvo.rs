@@ -121,8 +121,15 @@ pub async fn proximo_pedido() -> EstadoSalvo {
 
 /// Recoloca um pedido na fila — usado pela tarefa quando a gravação
 /// falha e vale tentar de novo.
+/// Preserva um pedido mais recente recebido durante a espera da tarefa.
 pub fn repete_gravacao(estado: EstadoSalvo) {
-    pede_gravacao(estado);
+    critical_section::with(|cs| {
+        let pedido = PEDIDO.borrow(cs);
+        if pedido.get().is_none() {
+            pedido.set(Some(estado));
+        }
+    });
+    AVISO.notify();
 }
 
 pub fn falhou() -> bool {

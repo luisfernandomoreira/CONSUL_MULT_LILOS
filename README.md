@@ -645,7 +645,8 @@ src/
 
 ferramentas/
 ├── confere_contra_cpp.py   compara as tabelas com o firmware C++
-└── le_adc.py               le os canais do ADC da placa por SWD
+├── le_adc.py               le os canais do ADC da placa por SWD
+└── testa_logica.rs         testes da logica pura, rodam no PC
 
 crates/gd32c2x1-pac/    PAC gerado por svd2rust (não editar)
 svd/                    SVD oficial da GigaDevice
@@ -673,6 +674,14 @@ motivos:
 | 6 | 24 MHz | 48 MHz | os tempos são em segundos/ms, não em ciclos |
 | 7 | ADC em modo contínuo, start/stop a cada leitura | uma conversão por disparo | mesmo resultado, menos registrador para mexer |
 | 8 | girar o seletor **não** zera o contador de ciclos do molho (`cicloAtual` é `static` dentro de `Molho()`) | zera | sem isso, trocar de programa no meio do molho leva o contador velho para o programa novo, que pode pular quase todo o molho. **Mudança de comportamento assumida** — se a fábrica preferir o jeito antigo, é remover três linhas de `selecionar_nova_lavagem` |
+| 9 | uma leitura do ADC vale na hora | só vale depois de **se repetir** (±20) | a tensão do divisor sobe gradualmente; uma amostra isolada no meio da subida caía na faixa de outro botão. Era o *Mais Secas* desligando a máquina |
+| 10 | `VerificarMudancaEncoder` age na primeira leitura diferente | age depois de **duas leituras iguais** (81–162 ms) | oscilação de contato do seletor recomeçava o ciclo sozinha; e girar devagar disparava uma gravação na flash por posição atravessada |
+| 11 | falha de flash congela a etapa, mas deixa os triacs como estavam | desliga os triacs, para os relógios e pisca o erro | o C++ só faz `return` na etapa; aqui a saída já ligada é cortada. Ao recuperar, a estabilização é refeita |
+
+Os itens 9, 10 e 11 têm a mesma raiz: **um sinal lido uma única vez não
+é um sinal**. Nos três casos a correção foi exigir confirmação antes de
+agir, e nos três o defeito só aparecia de vez em quando — que é o pior
+tipo de defeito para achar na bancada.
 
 ### O ADC, e o que ele custou
 
@@ -869,6 +878,29 @@ Ele espera o projeto C++ em `../CONSUL_MULT_CUBE/CONSUL_MULT_V1`; se
 estiver em outro lugar, passe o caminho da pasta `Core/Src` como
 argumento. Rode isto depois de mexer em [tabelas.rs](src/tabelas.rs),
 [placa.rs](src/placa.rs) ou [agita.rs](src/agita.rs).
+
+### Rodar os testes da lógica (sem placa)
+
+```bash
+rustc --test --edition 2021 -O ferramentas/testa_logica.rs -o target/testes.exe
+```
+
+```bash
+./target/testes.exe
+```
+
+São 19 testes sobre os quatro módulos que não dependem de hardware —
+`encoder`, `botoes`, `modelo` e `tabelas` —, que concentram o que foi
+transcrito à mão do C++. Cobrem as 16 posições do encoder sem
+duplicata, as faixas do ADC sem sobreposição e com folga entre elas, as
+sete combinações da chave de modelo, e o comportamento das tabelas nos
+limites.
+
+> **`cargo test` não funciona aqui**, e não é descuido: o alvo padrão é
+> `thumbv6m-none-eabi`, que não tem a crate `test`, e compilar para o
+> host falha porque o `build.rs` do lilos rejeita alvos que não são
+> Cortex-M. Daí os testes rodarem pelo `rustc` direto, no mesmo padrão
+> das outras ferramentas desta pasta.
 
 ### Preparar o ambiente (uma vez)
 

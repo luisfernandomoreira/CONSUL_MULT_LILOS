@@ -44,26 +44,59 @@ pub fn posicao(trilhas: [bool; 4]) -> u8 {
 
 /// Detecta que o usuário girou o seletor.
 ///
-/// Guarda a última leitura das quatro trilhas e avisa quando alguma
-/// mudou. É o `VerificarMudancaEncoder` do C++: basta UMA trilha mudar
-/// para o ciclo ser recomeçado no novo programa.
+/// Confirma a posição após duas leituras iguais consecutivas, para
+/// rejeitar oscilações de contato. Com amostragem de 81 ms, a mudança
+/// é confirmada em aproximadamente 81 a 162 ms.
 pub struct DetectorMudanca {
     ultimo: [bool; 4],
+    candidato: [bool; 4],
 }
 
 impl DetectorMudanca {
     /// Começa já sincronizado com a posição atual, para o boot não
     /// registrar uma troca que não houve.
     pub fn novo(trilhas: [bool; 4]) -> Self {
-        Self { ultimo: trilhas }
+        Self {
+            ultimo: trilhas,
+            candidato: trilhas,
+        }
     }
 
-    /// Devolve `true` no instante em que o seletor muda de posição.
+    /// Devolve `true` uma vez quando a nova posição se estabiliza.
     pub fn mudou(&mut self, trilhas: [bool; 4]) -> bool {
+        if trilhas != self.candidato {
+            self.candidato = trilhas;
+            return false;
+        }
         if trilhas == self.ultimo {
             return false;
         }
         self.ultimo = trilhas;
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DetectorMudanca;
+
+    #[test]
+    fn confirma_mudanca_sem_repetir_evento() {
+        let mut detector = DetectorMudanca::novo([false; 4]);
+        assert!(!detector.mudou([false; 4]));
+        assert!(!detector.mudou([true; 4]));
+        assert!(detector.mudou([true; 4]));
+        assert!(!detector.mudou([true; 4]));
+    }
+
+    #[test]
+    fn rejeita_ruido_e_reinicia_confirmacao() {
+        let inicial = [false; 4];
+        let nova = [true; 4];
+        let mut detector = DetectorMudanca::novo(inicial);
+        assert!(!detector.mudou(nova));
+        assert!(!detector.mudou(inicial));
+        assert!(!detector.mudou(nova));
+        assert!(detector.mudou(nova));
     }
 }
