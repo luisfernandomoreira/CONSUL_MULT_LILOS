@@ -15,6 +15,7 @@
 //!   placa      nomes dos pinos da placa CONSUL MULT
 //!   modelo     a chave SW1..SW4 que diz qual lavadora é
 //!   encoder    o seletor de 16 programas
+//!   erro       as protecoes e o codigo piscado de cada uma
 //!   botoes     os três botões do painel, lidos por ADC
 //!   relogio    o contador de segundos do ciclo (pode ser parado)
 //!   agita      o vai-e-vem do motor
@@ -54,6 +55,7 @@ mod agita;
 mod botoes;
 mod diag;
 mod encoder;
+mod erro;
 mod estado_salvo;
 mod evento;
 mod leituras;

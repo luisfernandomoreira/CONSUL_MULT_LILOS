@@ -11,8 +11,8 @@
 //! ./target/testes.exe
 //! ```
 //!
-//! Sao incluidos os quatro modulos que nao dependem de hardware:
-//! `encoder`, `botoes`, `modelo` e `tabelas`. Eles concentram o que foi
+//! Sao incluidos os cinco modulos que nao dependem de hardware:
+//! `encoder`, `erro`, `botoes`, `modelo` e `tabelas`. Eles concentram o que foi
 //! transcrito a mao do firmware C++, que e justamente o que mais vale
 //! ter sob teste.
 
@@ -22,6 +22,8 @@
 mod botoes;
 #[path = "../src/encoder.rs"]
 mod encoder;
+#[path = "../src/erro.rs"]
+mod erro;
 #[path = "../src/modelo.rs"]
 mod modelo;
 #[path = "../src/tabelas.rs"]
@@ -287,6 +289,67 @@ mod tabelas_tests {
             for t in 0u8..16 {
                 assert!(!tabelas::reutiliza_agua(m, t), "modelo {}", m);
             }
+        }
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// ERRO — os codigos piscados
+// ═════════════════════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod erro_tests {
+    use super::erro::Erro;
+
+    const TODOS: [Erro; 3] = [Erro::Nivel, Erro::Encher, Erro::Drenar];
+
+    /// Dois erros com o mesmo numero de piscadas seriam
+    /// indistinguiveis em campo — o tecnico conta as piscadas e nao tem
+    /// como saber qual dos dois aconteceu.
+    #[test]
+    fn nenhum_erro_repete_o_numero_de_piscadas() {
+        for (i, a) in TODOS.iter().enumerate() {
+            for b in &TODOS[i + 1..] {
+                assert_ne!(
+                    a.piscadas(),
+                    b.piscadas(),
+                    "{:?} e {:?} piscam o mesmo numero",
+                    a,
+                    b
+                );
+            }
+        }
+    }
+
+    /// A contagem comeca em 2: uma piscada so se confundiria com o
+    /// pisca de tampa aberta, que e o LED de ON/OFF sozinho.
+    #[test]
+    fn contagem_comeca_em_dois() {
+        for e in TODOS {
+            assert!(e.piscadas() >= 2, "{:?} pisca {} vez", e, e.piscadas());
+        }
+    }
+
+    /// Mais de umas poucas piscadas ninguem conta certo de longe.
+    #[test]
+    fn contagem_nao_passa_de_seis() {
+        for e in TODOS {
+            assert!(e.piscadas() <= 6, "{:?} pisca {} vezes", e, e.piscadas());
+        }
+    }
+
+    /// Os numeros sao os mesmos das outras placas da linha.
+    #[test]
+    fn codigos_batem_com_as_outras_placas() {
+        assert_eq!(Erro::Nivel.piscadas(), 2);
+        assert_eq!(Erro::Encher.piscadas(), 3);
+        assert_eq!(Erro::Drenar.piscadas(), 4);
+    }
+
+    #[test]
+    fn todo_erro_tem_nome() {
+        for e in TODOS {
+            assert!(!e.nome().is_empty(), "{:?} sem nome", e);
         }
     }
 }

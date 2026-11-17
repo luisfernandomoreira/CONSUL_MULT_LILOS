@@ -35,6 +35,7 @@ use lilos::time::{sleep_for, Millis, TickTime};
 
 use crate::agita::{self, Padrao};
 use crate::botoes::{self, Botao};
+use crate::erro::Erro;
 use crate::estado_salvo::{self, EstadoSalvo};
 use crate::leituras;
 use crate::modelo;
@@ -53,6 +54,12 @@ pub enum Etapa {
     Centrifugar = 4,
     Desligar = 5,
     Teste = 6,
+    /// Protecao disparou: tudo desligado e o painel piscando o codigo.
+    ///
+    /// Nunca e gravada na flash. Depois de uma queda de energia a
+    /// maquina retoma a etapa que estava rodando e, se a falha for
+    /// real, ela dispara de novo em minutos.
+    Erro = 7,
 }
 
 /// Dentro da etapa MOLHO, alterna entre parado e agitando.
@@ -69,6 +76,24 @@ const PISCA_MS: u64 = 301;
 /// Espera com as saídas desligadas depois de girar o seletor ou de
 /// fechar a tampa.
 const ESPERA_RETOMADA_MS: u64 = 2_000;
+
+/// Quanto o painel fica aceso em cada piscada do codigo de erro.
+const ERRO_ACESO_MS: u64 = 250;
+/// Quanto fica apagado entre duas piscadas do codigo.
+const ERRO_APAGADO_MS: u64 = 250;
+/// Pausa escura entre duas repeticoes do codigo.
+///
+/// Tres vezes mais longa que o intervalo entre piscadas, senao nao se
+/// sabe onde a contagem comeca.
+const ERRO_PAUSA_MS: u64 = 1_500;
+
+/// Quantas vezes o ciclo pode voltar a encher por queda de nivel antes
+/// de virar [`Erro::Nivel`].
+///
+/// Uma recuperacao e normal — espuma assentando, por exemplo, e o que
+/// o firmware C++ faz sempre. Tres seguidas na mesma lavagem e
+/// vazamento.
+const LIMITE_RECUPERACOES_NIVEL: u8 = 3;
 
 /// Teto de tempo da etapa de enchimento: 50 minutos.
 const LIMITE_ENCHER_S: u16 = 3_000;
@@ -212,14 +237,24 @@ pub struct Maquina<'a> {
     pisca_ligado: bool,
     ultimo_pisca: TickTime,
 
+    // ─── Codigo de erro piscado ──────────────────────────────────────────────
+    /// Qual protecao disparou, quando a etapa e [`Etapa::Erro`].
+    erro_atual: Option<Erro>,
+    /// Quando o erro comecou — da a fase do pisca do codigo.
+    inicio_erro: TickTime,
+    /// Estado atual do pisca, para so escrever no GPIO na transicao.
+    erro_aceso: bool,
+    /// Quantas vezes esta lavagem voltou a encher por queda de nivel.
+    recuperacoes_de_nivel: u8,
+
     // ─── Estado que no C++ são `static` dentro das funções ───────────────────
     molho_ciclo_atual: u16,
     molho_modo: ModoMolho,
     molho_modo_prev: ModoMolho,
     encher_ultimo_segundo: u16,
     encher_contador_incremento: u16,
-    /// `desligaLeds` do `limiteTempo`.
-    limite_desliga_leds: bool,
+    /// Se os LEDs ja foram apagados nesta falha de flash.
+    flash_apagou_leds: bool,
     /// `desligaLeds` do `getErroModeloMaquina`.
     modelo_desliga_leds: bool,
     /// `acaoProcessada` do `gerenciaInterface`.
@@ -260,12 +295,16 @@ impl<'a> Maquina<'a> {
             avanca_teste: 0,
             pisca_ligado: false,
             ultimo_pisca: agora,
+            erro_atual: None,
+            inicio_erro: agora,
+            erro_aceso: false,
+            recuperacoes_de_nivel: 0,
             molho_ciclo_atual: 1,
             molho_modo: ModoMolho::Molho,
             molho_modo_prev: ModoMolho::Molho,
             encher_ultimo_segundo: 0,
             encher_contador_incremento: 0,
-            limite_desliga_leds: true,
+            flash_apagou_leds: true,
             modelo_desliga_leds: false,
             acao_processada: false,
             teste_inicializado: false,
@@ -302,7 +341,7 @@ impl<'a> Maquina<'a> {
             relogio::reset_atrasos();
             self.tampa_fechada = false;
             self.interface_erro = true;
-            self.limite_tempo(true).await;
+            self.pisca_falha_flash().await;
             return;
         }
 
@@ -334,7 +373,88 @@ impl<'a> Maquina<'a> {
             Etapa::Centrifugar => self.centrifugar().await,
             Etapa::Desligar => self.desligar(),
             Etapa::Teste => self.teste(),
+            Etapa::Erro => self.pisca_codigo_de_erro(),
         }
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // PROTECOES — entrar em erro e piscar o codigo
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /// Trava a maquina com tudo desligado e comeca a piscar o codigo.
+    ///
+    /// Fica assim ate alguem apertar ON/OFF ou girar o seletor. O
+    /// estado NAO vai para a flash: depois de uma queda de energia a
+    /// maquina retoma a etapa que estava rodando, e se a falha for real
+    /// ela dispara de novo em minutos.
+    fn entra_em_erro(&mut self, erro: Erro) {
+        self.s.desliga_todos_triacs();
+        agita::liga_timer(false);
+        agita::zera();
+        relogio::liga(false);
+        relogio::reset_tudo();
+
+        self.s.apaga_leds();
+        self.pisca_desliga();
+
+        self.erro_atual = Some(erro);
+        self.inicio_erro = TickTime::now();
+        self.erro_aceso = false;
+        self.etapa = Etapa::Erro;
+    }
+
+    /// Pisca o painel inteiro no codigo do erro: N piscadas, pausa, repete.
+    ///
+    /// ```text
+    /// Drenar (4 piscadas):
+    ///   ▀▁▀▁▀▁▀▁________________▀▁▀▁▀▁▀▁________________ ...
+    ///   └── 4 × 500 ms ──┘└ 1,5 s ┘
+    /// ```
+    ///
+    /// Os tres LEDs piscam juntos para a contagem ser visivel de longe
+    /// e nao se confundir com o pisca de tampa aberta, que e so o LED
+    /// de ON/OFF.
+    ///
+    /// A fase sai do tempo decorrido, nao de um contador: nao importa
+    /// de quanto em quanto tempo esta funcao e chamada. O painel so e
+    /// escrito quando o nivel muda.
+    fn pisca_codigo_de_erro(&mut self) {
+        let Some(erro) = self.erro_atual else {
+            // Sem erro guardado nao ha codigo para piscar: desliga.
+            self.definir_etapa_desligado();
+            return;
+        };
+
+        self.s.desliga_todos_triacs();
+
+        const POR_PISCADA: u64 = ERRO_ACESO_MS + ERRO_APAGADO_MS;
+        let trem = erro.piscadas() * POR_PISCADA;
+        let ciclo = trem + ERRO_PAUSA_MS;
+
+        let fase = self.inicio_erro.elapsed().0 % ciclo;
+        let aceso = fase < trem && (fase % POR_PISCADA) < ERRO_ACESO_MS;
+
+        if aceso == self.erro_aceso {
+            return;
+        }
+        self.erro_aceso = aceso;
+        self.s.led_pause(aceso);
+        self.s.led_mais_secas(aceso);
+        self.s.led_enxague_duplo(aceso);
+    }
+
+    /// Conta uma queda de nivel e devolve `true` se virou erro.
+    ///
+    /// O firmware C++ simplesmente volta a encher, sempre. Uma
+    /// recuperacao e normal; tres na mesma lavagem e vazamento, e e aí
+    /// que isto para a maquina.
+    fn queda_de_nivel_virou_erro(&mut self) -> bool {
+        self.recuperacoes_de_nivel = self.recuperacoes_de_nivel.saturating_add(1);
+        if self.recuperacoes_de_nivel >= LIMITE_RECUPERACOES_NIVEL {
+            self.entra_em_erro(Erro::Nivel);
+            return true;
+        }
+        false
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -343,8 +463,8 @@ impl<'a> Maquina<'a> {
 
     async fn encher(&mut self) {
         let total = relogio::total_segundos();
-        if self.limite_tempo(total >= LIMITE_ENCHER_S).await {
-            self.interface_erro = true;
+        if total >= LIMITE_ENCHER_S {
+            self.entra_em_erro(Erro::Encher);
             return;
         }
 
@@ -431,7 +551,13 @@ impl<'a> Maquina<'a> {
             return;
         }
 
+        // Perdeu a agua: o C++ simplesmente volta a encher. Aqui
+        // tambem, mas contando — tres vezes na mesma lavagem e
+        // vazamento, nao espuma assentando.
         if !self.nivel_agua {
+            if self.queda_de_nivel_virou_erro() {
+                return;
+            }
             self.transicionar_para(Etapa::Encher);
             return;
         }
@@ -471,7 +597,13 @@ impl<'a> Maquina<'a> {
             return;
         }
 
+        // Perdeu a agua: o C++ simplesmente volta a encher. Aqui
+        // tambem, mas contando — tres vezes na mesma lavagem e
+        // vazamento, nao espuma assentando.
         if !self.nivel_agua {
+            if self.queda_de_nivel_virou_erro() {
+                return;
+            }
             self.transicionar_para(Etapa::Encher);
             return;
         }
@@ -637,8 +769,8 @@ impl<'a> Maquina<'a> {
         // Ainda tem água: continua drenando e marca para zerar o relógio
         // quando acabar.
         if self.nivel_agua {
-            if self.limite_tempo(total >= LIMITE_DRENAR_S).await {
-                self.interface_erro = true;
+            if total >= LIMITE_DRENAR_S {
+                self.entra_em_erro(Erro::Drenar);
                 return;
             }
             if bomba_sozinha {
@@ -727,8 +859,8 @@ impl<'a> Maquina<'a> {
             self.s.valvula_sabao(true);
         }
 
-        if self.limite_tempo(total >= LIMITE_ENCHER_S).await {
-            self.interface_erro = true;
+        if total >= LIMITE_ENCHER_S {
+            self.entra_em_erro(Erro::Encher);
         }
     }
 
@@ -740,6 +872,9 @@ impl<'a> Maquina<'a> {
 
         // Perdeu água no meio do enxágue: volta a drenar e enche de novo.
         if !self.nivel_agua {
+            if self.queda_de_nivel_virou_erro() {
+                return;
+            }
             self.para_agitacao();
             relogio::reset_tudo();
             self.num_enxagues_executado = 1;
@@ -830,8 +965,8 @@ impl<'a> Maquina<'a> {
 
         // Ainda tem água no cesto: não pode centrifugar.
         if self.nivel_agua {
-            if self.limite_tempo(total >= LIMITE_DRENAR_S).await {
-                self.interface_erro = true;
+            if total >= LIMITE_DRENAR_S {
+                self.entra_em_erro(Erro::Drenar);
                 return;
             }
             if bomba_sozinha {
@@ -903,6 +1038,7 @@ impl<'a> Maquina<'a> {
 
     fn desligar(&mut self) {
         self.s.apaga_leds();
+        self.limpa_erro();
 
         self.enxaguar_etapas = 1;
         self.num_enxagues_executado = 1;
@@ -1205,28 +1341,26 @@ impl<'a> Maquina<'a> {
         true
     }
 
-    /// Etapa demorou demais (não enche, não drena): desliga tudo e
-    /// pisca os LEDs. É o `limiteTempo` do C++.
-    async fn limite_tempo(&mut self, estourou: bool) -> bool {
-        if !estourou {
-            self.limite_desliga_leds = true;
-            return false;
-        }
-
-        self.s.desliga_todos_triacs();
-
-        // Na primeira passada apaga os LEDs; daí em diante (inclusive
-        // nesta mesma passada) pisca os tres juntos.
-        if self.limite_desliga_leds {
+    /// Falha ao gravar o estado na flash: desliga tudo e pisca os tres
+    /// LEDs juntos, rapido, enquanto a falha durar.
+    ///
+    /// Nao e um dos codigos contados de [`Erro`], e de proposito: os
+    /// codigos travam a maquina ate alguem apertar ON/OFF, e esta falha
+    /// **se cura sozinha** se a gravacao der certo na proxima tentativa
+    /// (a tarefa `gravacao` fica tentando). Travar seria pior.
+    ///
+    /// O pisca e de 250 ms, diferente do pisca lento de 700 ms da chave
+    /// de modelo invalida — ver `erro_de_modelo`.
+    async fn pisca_falha_flash(&mut self) {
+        if self.flash_apagou_leds {
             self.s.apaga_leds();
-            self.limite_desliga_leds = false;
+            self.flash_apagou_leds = false;
         }
 
         for _ in 0..4 {
             self.s.pisca_led_interface();
-            sleep_for(Millis(250)).await;
+            sleep_for(Millis(ERRO_ACESO_MS)).await;
         }
-        true
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -1236,6 +1370,7 @@ impl<'a> Maquina<'a> {
     /// O usuário girou o seletor: recomeça no programa novo.
     async fn selecionar_nova_lavagem(&mut self) {
         self.tipo_lavagem = leituras::posicao_encoder();
+        self.limpa_erro();
 
         self.s.desliga_todos_triacs();
         relogio::reset_tudo();
@@ -1314,6 +1449,7 @@ impl<'a> Maquina<'a> {
     /// retomar o ciclo de onde parou.
     pub fn seleciona_programa_inicial(&mut self) {
         self.tipo_lavagem = leituras::posicao_encoder();
+        self.limpa_erro();
 
         self.s.desliga_todos_triacs();
         relogio::reset_tudo();
@@ -1407,6 +1543,17 @@ impl<'a> Maquina<'a> {
         } else if self.acao_processada {
             match botoes::identifica(self.ad_button) {
                 Some(Botao::Pause) => {
+                    // Travado num codigo de erro: o ON/OFF e a saida.
+                    // Desliga a maquina, e o ciclo recomeca do zero no
+                    // proximo toque — nao se retoma de cima de uma
+                    // protecao que disparou.
+                    if etapa_atual == Etapa::Erro {
+                        self.limpa_erro();
+                        self.definir_etapa_desligado();
+                        self.acao_processada = false;
+                        return;
+                    }
+
                     self.garantir_ligado(etapa_atual);
 
                     if self.led_pause {
@@ -1441,7 +1588,7 @@ impl<'a> Maquina<'a> {
             }
         }
 
-        if !self.interface_erro && etapa_atual != Etapa::Desligar {
+        if !self.interface_erro && !matches!(etapa_atual, Etapa::Desligar | Etapa::Erro) {
             self.s.led_mais_secas(self.bt_mais_secas);
             self.s.led_enxague_duplo(self.bt_enxague_duplo);
 
@@ -1458,6 +1605,17 @@ impl<'a> Maquina<'a> {
             let m = modelo::do_chave(self.e.chave_modelo());
             self.define_etapa_por_tipo(m);
         }
+    }
+
+    /// Esquece o erro e zera a contagem de quedas de nivel.
+    ///
+    /// Chamada ao sair do erro pelo ON/OFF, ao girar o seletor e ao
+    /// desligar: em todos os casos uma lavagem nova comeca, e o
+    /// historico da anterior nao vale mais.
+    fn limpa_erro(&mut self) {
+        self.erro_atual = None;
+        self.erro_aceso = false;
+        self.recuperacoes_de_nivel = 0;
     }
 
     fn definir_etapa_desligado(&mut self) {

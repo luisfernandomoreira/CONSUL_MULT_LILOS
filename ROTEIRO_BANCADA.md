@@ -411,7 +411,40 @@ voltam a piscar as 2 piscadas de boot).
 
 ---
 
-## 12. Ciclo completo
+## 12. As proteções
+
+Vale provocar cada uma na bancada, porque é mais fácil aqui que em
+campo. O painel pisca o código: **N piscadas, pausa escura de 1,5 s,
+repete**, até alguém apertar ON/OFF ou girar o seletor.
+
+| Como provocar | Esperado |
+|---------------|----------|
+| Feche a torneira e ligue um programa | depois de 50 min, **3 piscadas** (`Encher`) |
+| Dobre ou tampe a mangueira de saída e deixe chegar na drenagem | depois de 6 min, **4 piscadas** (`Drenar`) |
+| Com a máquina agitando, abra a saída para a água escoar | ao terceiro reenchimento, **2 piscadas** (`Nivel`) |
+
+- [ ] Cada proteção pisca o seu número, e a contagem é fácil de seguir
+- [ ] Durante o erro **todos os triacs estão desligados** (meça)
+- [ ] ON/OFF sai do erro e desliga a máquina
+- [ ] Girar o seletor também sai do erro, já no programa novo
+- [ ] Abrir a tampa **não** sai do erro
+- [ ] Cortar e religar a energia **não** volta para o erro: a máquina
+      retoma a etapa, e se a falha persistir o erro dispara de novo
+
+O teste de `Encher` leva 50 min. Para não esperar, dá para baixar
+`LIMITE_ENCHER_S` em [maquina.rs](src/maquina.rs) temporariamente —
+mas **não grave a placa de produção com o valor reduzido**.
+
+Os dois avisos que **não** são código contado, e que se curam sozinhos:
+
+| Aviso | Ritmo | Como provocar |
+|-------|-------|---------------|
+| Chave de modelo inválida | pisca contínuo de 700 ms | ponha a chave numa combinação não usada |
+| Falha ao gravar na flash | pisca contínuo de 250 ms | difícil de provocar de propósito |
+
+---
+
+## 13. Ciclo completo
 
 Por último, um ciclo inteiro num programa curto, com carga de potência
 e água, acompanhando a sequência:

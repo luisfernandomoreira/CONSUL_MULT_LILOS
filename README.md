@@ -135,9 +135,14 @@ Os três piscando juntos = erro. O **ritmo** diz qual:
 | Ritmo dos três LEDs | Significa |
 |---------------------|-----------|
 | 2 piscadas de 500 ms e para | boot normal |
-| pisca lento (700 ms), sem parar | modelo inválido |
-| pisca rápido (250 ms), sem parar | tempo de etapa estourou |
+| **N piscadas, pausa escura, repete** | protecão disparou — conte o N na [tabela de códigos](#protecões-e-códigos-de-erro) |
+| pisca lento (700 ms), sem parar | chave de modelo inválida |
+| pisca rápido (250 ms), sem parar | falha ao gravar na flash |
 | padrão irregular de 301 ms | auto-teste rodando |
+
+Os três primeiros não se confundem: o código de erro tem **pausa
+escura** entre as repetições, e os outros dois são pisca contínuo, de
+velocidades bem diferentes.
 
 ---
 
@@ -595,7 +600,7 @@ funções de escolha em `agita.rs`, uma por contexto (`etapa_agitar`,
 | **Pausa (ON/OFF)** | idem | apertar o ON/OFF de novo |
 | **Seletor girado** | recomeça no programa novo | 2 s (modelo 6: ON/OFF) |
 | **Modelo inválido** | LEDs piscando 700 ms, nada liga | corrigir a chave |
-| **Tempo estourado** | LEDs piscando 250 ms | não volta sozinho |
+| **Proteção disparou** | tudo desligado, painel piscando o código | apertar ON/OFF ou girar o seletor |
 | **Lavagem econômica** | pausa na entrada do enxágue | abrir a tampa |
 
 Dois detalhes que não são óbvios:
@@ -608,12 +613,53 @@ Dois detalhes que não são óbvios:
   ON/OFF fica piscando até alguém apertar o botão. É uma exigência
   daquela lavadora, não uma inconsistência.
 
-Os limites de tempo são:
+### Proteções e códigos de erro
 
-| Etapa | Limite | O que indica |
-|-------|--------|--------------|
-| ENCHER (e entrada de água do enxágue) | 50 min | não está entrando água |
-| Drenagem e centrifugação | 6 min | não está saindo água |
+Esta placa não tem display, então a proteção que disparou se anuncia
+pelo **número de piscadas** dos três LEDs juntos. O técnico conta as
+piscadas em campo, sem gravador e sem nada ligado.
+
+Os números são os mesmos das outras placas da linha, para não haver uma
+tabela por produto.
+
+| Piscadas | Erro | O que aconteceu | O que suspeitar |
+|----------|------|-----------------|-----------------|
+| **2** | `Nivel` | o nível caiu sozinho 3 vezes na mesma lavagem | vazamento, mangueira solta, pressostato |
+| **3** | `Encher` | 50 min enchendo e o nível não chegou | torneira fechada, válvula de sabão, pressostato |
+| **4** | `Drenar` | 6 min drenando e o tanque não esvaziou | bomba, mangueira dobrada, filtro entupido |
+
+```text
+Drenar (4 piscadas):
+
+  ▀▀▀▀▀_____▀▀▀▀▀_____▀▀▀▀▀_____▀▀▀▀▀___________________________________
+  └ 250 ms acesa, 250 ms apagada ────────────┘└──── 1,5 s escuro ─────┘
+  └─────────────── uma repetição: 3,5 s ────────────────────────────────┘
+```
+
+A contagem **começa em 2** de propósito: uma piscada só se confundiria
+com o pisca de tampa aberta, que é o LED de ON/OFF sozinho. E a pausa
+escura é três vezes mais longa que o intervalo entre piscadas, senão
+não se sabe onde a contagem começa.
+
+Quem define o código é `Erro::piscadas()`, em [erro.rs](src/erro.rs) —
+uma linha por erro. Para acrescentar um erro, dê a ele um número ainda
+não usado; os testes de `ferramentas/testa_logica.rs` reprovam se dois
+erros piscarem a mesma quantidade.
+
+**O erro trava a máquina** com tudo desligado, até alguém apertar
+ON/OFF ou girar o seletor. Ele **não vai para a flash**: depois de uma
+queda de energia a máquina retoma a etapa que estava rodando, e se a
+falha for real ela dispara de novo em minutos.
+
+### Os dois avisos que não são código
+
+Estes piscam continuamente e **se curam sozinhos** quando a causa sai,
+então não travam a máquina e não têm número:
+
+| Aviso | Ritmo | Por que não trava |
+|-------|-------|-------------------|
+| Chave de modelo inválida | 700 ms | o técnico corrige a chave e o aviso sai; travar obrigaria a apertar ON/OFF depois |
+| Falha ao gravar na flash | 250 ms | a tarefa de gravação fica tentando; se a próxima der certo, o ciclo segue |
 
 ---
 
@@ -632,6 +678,7 @@ src/
 ├── placa.rs           mapa de pinos + Saidas / Entradas
 ├── modelo.rs          chave SW1..SW4 → modelo 1..8
 ├── encoder.rs         4 trilhas → programa 0..15
+├── erro.rs            as proteções e o código piscado de cada uma
 ├── botoes.rs          faixas de ADC → qual botão
 ├── diag.rs            diagnóstico do ADC (build de bancada)
 ├── relogio.rs         contador de segundos do ciclo
@@ -677,6 +724,7 @@ motivos:
 | 9 | uma leitura do ADC vale na hora | só vale depois de **se repetir** (±20) | a tensão do divisor sobe gradualmente; uma amostra isolada no meio da subida caía na faixa de outro botão. Era o *Mais Secas* desligando a máquina |
 | 10 | `VerificarMudancaEncoder` age na primeira leitura diferente | age depois de **duas leituras iguais** (81–162 ms) | oscilação de contato do seletor recomeçava o ciclo sozinha; e girar devagar disparava uma gravação na flash por posição atravessada |
 | 11 | falha de flash congela a etapa, mas deixa os triacs como estavam | desliga os triacs, para os relógios e pisca o erro | o C++ só faz `return` na etapa; aqui a saída já ligada é cortada. Ao recuperar, a estabilização é refeita |
+| 12 | tempo estourado pisca os LEDs e **continua tentando**; nível que cai volta a encher **para sempre** | protecão **trava** a máquina com um código contado, e a terceira queda de nível na mesma lavagem é erro | sem isso, torneira fechada deixa a máquina enchendo a noite toda, e um vazamento enche e esvazia indefinidamente. Os códigos são os mesmos das outras placas da linha. O limite de 3 recuperações está em `LIMITE_RECUPERACOES_NIVEL` |
 
 Os itens 9, 10 e 11 têm a mesma raiz: **um sinal lido uma única vez não
 é um sinal**. Nos três casos a correção foi exigir confirmação antes de
