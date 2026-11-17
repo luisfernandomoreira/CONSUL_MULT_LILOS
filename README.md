@@ -965,10 +965,38 @@ Anote `VREFINT` e os patamares dos botões em duas ou três placas
 | **muda** | igual | a fonte varia e o divisor acompanha — **ratiométrico, faixas seguras** |
 | **muda** | **muda junto** | o divisor **não** acompanha a fonte: as faixas vão errar de placa para placa |
 
-Se cair no terceiro caso, o conserto é normalizar a leitura pelo
-`VREFINT` antes de comparar com as faixas — mas não vale fazer isso
-**antes** de medir, porque num divisor ratiométrico a normalização
-*introduziria* o erro que deveria corrigir.
+### A normalização, e a trava que a torna segura
+
+A correção está **implementada e testada**, mas sai de fábrica
+**inerte**: `VREFINT_REFERENCIA` em [botoes.rs](src/botoes.rs) vale
+zero, e com isso `normaliza()` devolve a leitura como veio.
+
+Falta um número, e só um: a leitura de `VREFINT` **na placa onde as
+faixas foram medidas**. Sem ele não há conta — a correção é a razão
+entre o `VREFINT` da calibração e o de agora. Rode
+`python -I ferramentas/le_adc.py` nessa placa e ele imprime a linha
+pronta para colar.
+
+**A trava.** A normalização é certa num caso e errada no outro: num
+divisor ratiométrico a leitura já estava correta, e normalizar
+*introduz* um erro do tamanho da variação da fonte. Como a dúvida só
+se encerra medindo, a correção é limitada a **1,5%**
+(`CORRECAO_MAXIMA_MILESIMOS`), escolhido assim:
+
+| Limite | Pior erro introduzido | Margem da faixa | |
+|--------|----------------------|-----------------|---|
+| 1,0% | 9 contagens | 25 | sobra muita margem |
+| **1,5%** | **14 contagens** | 25 | sobra 44% — escolhido |
+| 3,0% | 28 contagens | 25 | **estouraria a faixa** |
+
+Ou seja: **mesmo se o palpite estiver errado**, a normalização não
+consegue fazer um botão deixar de ser reconhecido. Há um teste que
+prova isso — simula um divisor ratiométrico com a fonte 5% fora (bem
+acima da tolerância de um regulador) e confere que os três botões
+continuam sendo identificados.
+
+Se a bancada mostrar que o divisor **não** é ratiométrico, esse limite
+pode subir, porque aí a correção é ganho e não risco.
 
 Detalhe curioso: o firmware C++ de fábrica **habilitou** o canal
 `VREFINT` (`ADC_CHANNEL_VREFINT` no `.ioc`) e nunca o leu. Alguém já

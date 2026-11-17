@@ -353,3 +353,132 @@ mod erro_tests {
         }
     }
 }
+
+// ═════════════════════════════════════════════════════════════════════════════
+// BOTOES — normalizacao pela referencia interna
+// ═════════════════════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod normaliza_tests {
+    use super::botoes::{self, CORRECAO_MAXIMA_MILESIMOS, VREFINT_REFERENCIA};
+
+    /// Sem valor de calibracao nao ha conta a fazer: a leitura passa
+    /// intocada. E o estado em que o firmware sai de fabrica, ate
+    /// alguem medir o VREFINT da placa de referencia.
+    #[test]
+    fn inerte_sem_calibracao() {
+        if VREFINT_REFERENCIA != 0 {
+            return; // ja calibrado; este teste nao se aplica
+        }
+        for ad in [0u16, 30, 789, 851, 931, 1023] {
+            for vref in [0u16, 300, 372, 400] {
+                assert_eq!(botoes::normaliza(ad, vref), ad, "ad={} vref={}", ad, vref);
+            }
+        }
+    }
+
+    /// VREFINT ausente (leitura falhou) nunca deve zerar nem distorcer
+    /// a leitura do botao.
+    #[test]
+    fn inerte_sem_leitura_de_vrefint() {
+        for ad in [0u16, 789, 1023] {
+            assert_eq!(botoes::normaliza(ad, 0), ad);
+        }
+    }
+
+    /// Com o VREFINT igual ao da calibracao, a correcao e 1:1.
+    #[test]
+    fn nao_mexe_quando_a_fonte_e_a_mesma() {
+        if VREFINT_REFERENCIA == 0 {
+            return;
+        }
+        for ad in [30u16, 789, 851, 931] {
+            assert_eq!(botoes::normaliza(ad, VREFINT_REFERENCIA), ad, "ad={}", ad);
+        }
+    }
+
+    /// O caso que mais preocupa: se o divisor for ratiometrico, a
+    /// normalizacao esta ERRADA — a leitura ja estava certa. O limite
+    /// de correcao existe para que, nesse caso, o erro introduzido
+    /// fique DENTRO da faixa do botao.
+    ///
+    /// Simula uma fonte 5% diferente (bem acima da tolerancia de um
+    /// regulador) e confere que todo botao continua sendo reconhecido.
+    #[test]
+    fn mesmo_errada_a_normalizacao_nao_estoura_a_faixa() {
+        let referencia = if VREFINT_REFERENCIA == 0 { 372 } else { VREFINT_REFERENCIA };
+
+        for (centro, esperado) in [
+            (789u16, botoes::Botao::Pause),
+            (851, botoes::Botao::MaisSecas),
+            (931, botoes::Botao::EnxagueDuplo),
+        ] {
+            for desvio_pct in [-5i32, -3, -1, 0, 1, 3, 5] {
+                // Divisor ratiometrico: a leitura NAO muda com a fonte.
+                let ad = centro;
+                // Mas o VREFINT muda, e e o que a normalizacao enxerga.
+                let vref = ((referencia as i32) * (100 + desvio_pct) / 100) as u16;
+
+                let corrigido = normaliza_com(ad, vref, referencia);
+                let erro = (corrigido as i32 - ad as i32).abs();
+                let limite = (ad as i32) * (CORRECAO_MAXIMA_MILESIMOS as i32) / 1000;
+                assert!(
+                    erro <= limite + 1,
+                    "centro {} desvio {}%: erro {} passou do limite {}",
+                    centro, desvio_pct, erro, limite
+                );
+                assert_eq!(
+                    botoes::identifica(corrigido),
+                    Some(esperado),
+                    "centro {} desvio {}% deu {} e saiu da faixa",
+                    centro, desvio_pct, corrigido
+                );
+            }
+        }
+    }
+
+    /// A trava precisa valer nos dois sentidos, nao so para cima.
+    #[test]
+    fn a_trava_vale_nos_dois_sentidos() {
+        let referencia = 372u16;
+        for ad in [100u16, 789, 1000] {
+            let limite = (ad as u32) * CORRECAO_MAXIMA_MILESIMOS / 1000;
+            // VREFINT muito maior -> correcao para baixo
+            let baixo = normaliza_com(ad, referencia * 4, referencia);
+            // VREFINT muito menor -> correcao para cima
+            let alto = normaliza_com(ad, referencia / 4, referencia);
+            assert!(
+                (ad as u32).saturating_sub(baixo as u32) <= limite,
+                "ad={} caiu demais: {}", ad, baixo
+            );
+            assert!(
+                (alto as u32).saturating_sub(ad as u32) <= limite,
+                "ad={} subiu demais: {}", ad, alto
+            );
+        }
+    }
+
+    /// Nunca pode passar do fundo de escala de 10 bits.
+    #[test]
+    fn nunca_passa_de_1023() {
+        let referencia = 372u16;
+        for ad in [1000u16, 1020, 1023] {
+            assert!(normaliza_com(ad, 1, referencia) <= 1023);
+        }
+    }
+
+    /// A mesma conta de `botoes::normaliza`, com a referencia passada
+    /// por fora — permite testar o comportamento calibrado sem mexer
+    /// na constante do firmware.
+    fn normaliza_com(ad: u16, vrefint: u16, referencia: u16) -> u16 {
+        if referencia == 0 || vrefint == 0 {
+            return ad;
+        }
+        let ad32 = ad as u32;
+        let corrigido = ad32 * referencia as u32 / vrefint as u32;
+        let limite = ad32 * CORRECAO_MAXIMA_MILESIMOS / 1_000;
+        corrigido
+            .clamp(ad32.saturating_sub(limite), ad32 + limite)
+            .min(1023) as u16
+    }
+}

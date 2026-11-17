@@ -311,7 +311,6 @@ pub fn registra_plato(valor: u16) {
 pub static mut DIAG_VREFINT: u16 = 0;
 
 /// Guarda a leitura da referencia interna.
-#[cfg(feature = "diag-botoes")]
 pub fn registra_vrefint(valor: u16) {
     // SAFETY: escrita volatil num `static mut` que so a tarefa de
     // diagnostico escreve.

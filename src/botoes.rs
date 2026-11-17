@@ -83,6 +83,75 @@ const FAIXA_MAIS_SECAS: (u16, u16) = (826, 876);
 /// Centro inferido do mesmo deslocamento: **~931**. No C++: 937..987.
 const FAIXA_ENXAGUE_DUPLO: (u16, u16) = (906, 956);
 
+// ═════════════════════════════════════════════════════════════════════════════
+// NORMALIZAÇÃO PELA REFERÊNCIA INTERNA
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// Leitura de `VREFINT` na placa onde as faixas acima foram medidas.
+///
+/// **Zero significa "ainda não medido"**, e nesse caso a normalização
+/// fica inerte: `normaliza` devolve a leitura como veio. Para ligar,
+/// rode `python -I ferramentas/le_adc.py` na placa de referência e
+/// ponha aqui o número que ele mostra como `VREFINT`.
+///
+/// Sem esse valor não há como normalizar: a correção é uma razão entre
+/// o `VREFINT` de agora e o da calibração, e sem o segundo termo não há
+/// conta.
+pub const VREFINT_REFERENCIA: u16 = 0;
+
+/// Quanto a normalização pode mexer na leitura, em milésimos.
+///
+/// ─── Por que existe um limite ────────────────────────────────
+///
+/// A normalização é **certa num caso e errada no outro**:
+///
+/// * divisor **não** ratiométrico (alimentado por outra referência):
+///   a leitura varia com a fonte, e normalizar corrige;
+/// * divisor **ratiométrico** (alimentado pela mesma fonte que é a
+///   referência do ADC): a leitura já está certa, e normalizar
+///   **introduz** um erro do tamanho da variação da fonte.
+///
+/// As evidências desta placa apontam para o segundo caso — o desvio
+/// medido foi deslocamento, não escala (ver o README). Como a dúvida
+/// só se encerra medindo duas placas, o limite garante que, estando
+/// errado o palpite, o estrago seja menor que a margem da faixa:
+///
+/// | Limite | Pior erro introduzido | Margem da faixa |
+/// |--------|----------------------|-----------------|
+/// | 1,0% | 9 contagens | 25 |
+/// | **1,5%** | **14 contagens** | 25 |
+/// | 3,0% | 28 contagens | 25 — **estouraria** |
+///
+/// Com 1,5% sobra quase metade da margem para ruído, temperatura e
+/// tolerância dos resistores. Se a bancada mostrar que o divisor NÃO é
+/// ratiométrico, este limite pode subir.
+pub const CORRECAO_MAXIMA_MILESIMOS: u32 = 15;
+
+/// Corrige a leitura pela referência interna de tensão.
+///
+/// `vrefint` é a leitura do canal 14 — uma tensão fixa do chip medida
+/// contra a fonte, então ela sobe quando a fonte cai. A correção é a
+/// razão entre o `VREFINT` da calibração e o de agora.
+///
+/// Devolve a leitura **intocada** quando não há o que fazer: sem valor
+/// de calibração, sem leitura de `VREFINT`, ou quando a correção
+/// passaria do limite — nesse último caso aplica o limite.
+pub fn normaliza(ad: u16, vrefint: u16) -> u16 {
+    if VREFINT_REFERENCIA == 0 || vrefint == 0 {
+        return ad;
+    }
+
+    let ad32 = ad as u32;
+    let corrigido = ad32 * VREFINT_REFERENCIA as u32 / vrefint as u32;
+
+    // Trava a correção no limite, nos dois sentidos.
+    let limite = ad32 * CORRECAO_MAXIMA_MILESIMOS / 1_000;
+    let piso = ad32.saturating_sub(limite);
+    let teto = ad32 + limite;
+
+    corrigido.clamp(piso, teto).min(1023) as u16
+}
+
 #[inline]
 fn dentro(valor: u16, faixa: (u16, u16)) -> bool {
     valor >= faixa.0 && valor <= faixa.1

@@ -20,6 +20,7 @@ use core::convert::Infallible;
 
 use lilos::time::{sleep_for, Millis, PeriodicGate};
 
+use crate::botoes;
 use crate::diag;
 use crate::encoder::{self, DetectorMudanca};
 use crate::estado_salvo;
@@ -174,6 +175,10 @@ impl FiltroPressostato {
 /// lido como *Pausa* — e Pausa desliga a máquina. Ver `botoes.rs`.
 const TOLERANCIA_AD: u16 = 20;
 
+/// De quantas em quantas amostragens a referência interna é relida.
+/// 12 × 81 ms ≈ 1 s — ela só muda se a fonte mudar.
+const PASSOS_POR_VREFINT: u8 = 12;
+
 /// Lê o seletor, os botões e o pressostato a cada 81 ms.
 pub async fn amostragem(e: &Entradas, adc_periferico: &Adc) -> Infallible {
     let mut detector = DetectorMudanca::novo(e.trilhas_encoder());
@@ -181,6 +186,11 @@ pub async fn amostragem(e: &Entradas, adc_periferico: &Adc) -> Infallible {
 
     // Última leitura crua do ADC, para confirmar a próxima.
     let mut ad_anterior: Option<u16> = None;
+
+    // Referência interna, relida de vez em quando: ela só muda se a
+    // fonte mudar, o que não acontece de 81 em 81 ms.
+    let mut vrefint: u16 = adc::converte_vrefint(adc_periferico).unwrap_or(0);
+    let mut passos_ate_reler_vrefint: u8 = 0;
 
     let mut gate = PeriodicGate::from(Millis(AMOSTRAGEM_MS));
     loop {
@@ -200,15 +210,29 @@ pub async fn amostragem(e: &Entradas, adc_periferico: &Adc) -> Infallible {
         // isolada no meio dessa subida pode cair na faixa de outro
         // botão. Duas leituras iguais seguidas significam patamar, não
         // travessia.
+        // Relê a referência interna a cada ~1 s.
+        passos_ate_reler_vrefint = passos_ate_reler_vrefint.saturating_add(1);
+        if passos_ate_reler_vrefint >= PASSOS_POR_VREFINT {
+            passos_ate_reler_vrefint = 0;
+            if let Some(v) = adc::converte_vrefint(adc_periferico) {
+                vrefint = v;
+                diag::registra_vrefint(v);
+            }
+        }
+
         match adc::converte(adc_periferico) {
             Some(valor) => {
                 diag::registra_leitura(valor);
 
+                // A confirmação é feita sobre a leitura CRUA: a
+                // normalização acrescenta um tiquinho de variação,
+                // vinda da leitura do VREFINT, e isso não deve contar
+                // como instabilidade do botão.
                 let estavel = ad_anterior
                     .map(|anterior| valor.abs_diff(anterior) <= TOLERANCIA_AD)
                     .unwrap_or(false);
                 if estavel {
-                    leituras::set_ad(valor);
+                    leituras::set_ad(botoes::normaliza(valor, vrefint));
                 }
                 ad_anterior = Some(valor);
             }

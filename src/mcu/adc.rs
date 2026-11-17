@@ -47,7 +47,6 @@ pub const CANAL_BOTOES: u8 = 6;
 ///
 /// ⚠ O número do canal vem da mesma fonte do canal dos botões. Se a
 /// leitura vier absurda, confira no User Manual.
-#[cfg_attr(not(feature = "diag-botoes"), allow(dead_code))]
 pub const CANAL_VREFINT: u8 = 14;
 
 /// Quantos canais a sequência regular endereça (campo RSQ de 4 bits,
@@ -164,7 +163,6 @@ pub fn converte(adc: &Adc) -> Option<u16> {
 /// | igual | igual | as fontes são iguais; nada a discutir |
 /// | **muda** | igual | a fonte varia, mas o divisor acompanha — leitura **ratiométrica**, as faixas estão seguras |
 /// | **muda** | **muda junto, ao contrário** | o divisor **não** acompanha a fonte: as faixas vão errar de placa para placa |
-#[cfg(feature = "diag-botoes")]
 pub fn converte_vrefint(adc: &Adc) -> Option<u16> {
     let ja_ligado = adc.ctl1().read().inrefen().bit_is_set();
     if !ja_ligado {
