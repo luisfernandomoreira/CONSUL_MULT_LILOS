@@ -9,11 +9,15 @@
 //! resolução em 10 bits.
 //!
 //! ```text
-//!     0 ..  60   nenhum botão apertado (repouso)
+//!     0 ..  60   nenhum botão apertado (medido:   0)
 //!   764 .. 814   Pausa / ON-OFF        (medido: 789)
-//!   826 .. 876   Roupas Mais Secas     (medido: ~851)
-//!   906 .. 956   Enxágue Duplo         (medido: ~931)
+//!   824 .. 874   Roupas Mais Secas     (medido: 849)
+//!   906 .. 956   Enxágue Duplo         (medido: 931)
 //! ```
+//!
+//! Os quatro valores foram **medidos na placa**, com o build
+//! `--features diag-botoes`. A faixa é o valor medido ±25, a mesma
+//! largura que o firmware C++ usava.
 //!
 //! Valores fora de todas as faixas são ignorados: é o que acontece no
 //! instante em que o contato fecha ou abre.
@@ -55,9 +59,9 @@
 //! `tarefas::amostragem` só publica uma leitura depois de ela se
 //! repetir: uma amostra isolada no meio da subida é descartada.
 //!
-//! Os valores de `MAIS_SECAS` e `ENXAGUE_DUPLO` ainda são inferidos do
-//! mesmo deslocamento — o build `--features diag-botoes` grava os
-//! patamares de cada botão para confirmar.
+//! O deslocamento de 31 foi confirmado por medida: inferi 851 para o
+//! *Mais Secas* e o painel deu **849**; inferi 931 para o *Enxágue
+//! Duplo* e deu **931**, exato.
 
 /// Qual botão o valor do ADC representa.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -78,9 +82,9 @@ pub enum Botao {
 const REPOUSO: (u16, u16) = (0, 60);
 /// Centro medido na placa: **789**. No C++ era 795..845.
 const FAIXA_PAUSE: (u16, u16) = (764, 814);
-/// Centro inferido do mesmo deslocamento: **~851**. No C++: 857..907.
-const FAIXA_MAIS_SECAS: (u16, u16) = (826, 876);
-/// Centro inferido do mesmo deslocamento: **~931**. No C++: 937..987.
+/// Centro medido na placa: **849**. No C++: 857..907.
+const FAIXA_MAIS_SECAS: (u16, u16) = (824, 874);
+/// Centro medido na placa: **931**. No C++: 937..987.
 const FAIXA_ENXAGUE_DUPLO: (u16, u16) = (906, 956);
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -89,15 +93,21 @@ const FAIXA_ENXAGUE_DUPLO: (u16, u16) = (906, 956);
 
 /// Leitura de `VREFINT` na placa onde as faixas acima foram medidas.
 ///
-/// **Zero significa "ainda não medido"**, e nesse caso a normalização
-/// fica inerte: `normaliza` devolve a leitura como veio. Para ligar,
-/// rode `python -I ferramentas/le_adc.py` na placa de referência e
-/// ponha aqui o número que ele mostra como `VREFINT`.
+/// Medido na placa de referência: leituras de **375, 376 e 378** em
+/// amostras seguidas, ou seja ±1,5 contagem de ruído. Adotado **376**.
 ///
-/// Sem esse valor não há como normalizar: a correção é uma razão entre
-/// o `VREFINT` de agora e o da calibração, e sem o segundo termo não há
-/// conta.
-pub const VREFINT_REFERENCIA: u16 = 0;
+/// Serve de aferição cruzada do conjunto: 376 de 1023 contra a VDDA dá
+/// `VREFINT ≈ 0,367 × VDDA`. Com a VDDA em 3,30 V isso são **1,21 V**,
+/// exatamente o valor típico da referência interna destes chips — o
+/// que confirma, de um jeito independente, que o canal 14 é mesmo o
+/// `VREFINT`, que a escala de 10 bits está certa e que a fonte desta
+/// placa está em 3,30 V.
+///
+/// **Zero significa "ainda não medido"**, e nesse caso a normalização
+/// fica inerte: `normaliza` devolve a leitura como veio. Para
+/// recalibrar, rode `python -I ferramentas/le_adc.py` na placa de
+/// referência e ponha aqui o número que ele mostra como `VREFINT`.
+pub const VREFINT_REFERENCIA: u16 = 376;
 
 /// Quanto a normalização pode mexer na leitura, em milésimos.
 ///

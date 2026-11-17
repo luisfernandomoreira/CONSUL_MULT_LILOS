@@ -67,11 +67,12 @@ mod encoder_tests {
 mod botoes_tests {
     use super::botoes::{self, Botao};
 
-    /// Valores medidos (Pausa) e inferidos do deslocamento de -31 na
-    /// placa com o GD32. Se alguem mexer nas faixas, isto acusa.
+    /// Os tres valores MEDIDOS na placa com o GD32, pelo build
+    /// `--features diag-botoes`. Se alguem mexer nas faixas, isto
+    /// acusa.
     const MEDIDOS: [(u16, Botao); 3] = [
         (789, Botao::Pause),
-        (851, Botao::MaisSecas),
+        (849, Botao::MaisSecas),
         (931, Botao::EnxagueDuplo),
     ];
 
@@ -80,7 +81,7 @@ mod botoes_tests {
         // Esta placa le zero em repouso. Com o limite inferior em 7,
         // como no C++, o ferrolho nunca armava e nenhum botao
         // funcionava.
-        assert!(botoes::em_repouso(0));
+        assert!(botoes::em_repouso(0)); // valor medido na placa
         assert!(botoes::em_repouso(30));
         assert!(botoes::em_repouso(60));
         assert!(!botoes::em_repouso(61));
@@ -410,7 +411,7 @@ mod normaliza_tests {
 
         for (centro, esperado) in [
             (789u16, botoes::Botao::Pause),
-            (851, botoes::Botao::MaisSecas),
+            (849, botoes::Botao::MaisSecas),
             (931, botoes::Botao::EnxagueDuplo),
         ] {
             for desvio_pct in [-5i32, -3, -1, 0, 1, 3, 5] {

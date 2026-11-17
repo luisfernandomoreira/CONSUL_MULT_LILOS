@@ -462,8 +462,9 @@ for nome in ["REPOUSO", "FAIXA_PAUSE", "FAIXA_MAIS_SECAS", "FAIXA_ENXAGUE_DUPLO"
 # As faixas do ADC sao o UNICO lugar em que o porte divergiu de
 # proposito. Medido na bancada, o mesmo divisor resistivo le cerca de
 # 31 contagens abaixo no GD32: o repouso da 0 em vez de ~33, e o botao
-# de ON/OFF da 789 em vez de ~820. As faixas do Rust sao as do C++
-# DESLOCADAS desse tanto, mantendo a largura.
+# de ON/OFF da 789 em vez de ~820. As faixas do Rust sao centradas nos
+# valores MEDIDOS na placa (789, 849 e 931), mantendo a largura de +-25
+# que o C++ usava.
 #
 # (A primeira tentativa foi alargar as faixas para cobrir as duas
 # escalas. Deu defeito: a tensao sobe gradualmente quando o contato
@@ -504,14 +505,28 @@ if len(faixas_cpp) == len(faixas_rs) == 4:
             continue
         confere("largura da faixa %s" % nome, [c[1] - c[0]], [r[1] - r[0]])
 
-    # 3. O mesmo deslocamento nas tres faixas de botao.
+    # 3. Deslocamentos PARECIDOS entre si.
+    #
+    #    Quando dois dos tres centros eram inferidos de um unico
+    #    deslocamento, exigir que os tres fossem identicos fazia
+    #    sentido. Agora os tres sao MEDIDOS na placa, e medidas reais
+    #    nao batem na casa decimal: Pausa -31, Mais Secas -33, Enxague
+    #    Duplo -31.
+    #
+    #    O que continua valendo e que o desvio tem a MESMA natureza nas
+    #    tres — se uma faixa fugir das outras, ou alguem errou um
+    #    numero, ou aquele botao tem outro problema.
+    ESPALHAMENTO_MAXIMO = 6
+    espalhamento = max(deslocamentos) - min(deslocamentos)
     confere(
-        "deslocamento igual nas tres faixas de botao",
+        "deslocamentos parecidos (espalhamento <= %d)" % ESPALHAMENTO_MAXIMO,
         [True],
-        [len(set(deslocamentos)) == 1],
+        [espalhamento <= ESPALHAMENTO_MAXIMO],
     )
-    if len(set(deslocamentos)) == 1:
-        print("  (deslocamento medido na placa: %+d contagens)" % deslocamentos[0])
+    print(
+        "  (deslocamento medido na placa: %+d a %+d contagens, espalhamento %d)"
+        % (max(deslocamentos), min(deslocamentos), espalhamento)
+    )
 else:
     confere("4 faixas", faixas_cpp, faixas_rs)
 

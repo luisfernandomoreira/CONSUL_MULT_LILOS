@@ -105,11 +105,14 @@ estão num divisor resistivo ligado a **PA6**, lido pelo ADC. O firmware
 descobre qual foi apertado pela faixa de tensão:
 
 ```text
-    7 ..  60   nenhum botão apertado (repouso)
-  795 .. 845   Pausa / ON-OFF
-  857 .. 907   Roupas Mais Secas
-  937 .. 987   Enxágue Duplo
+    0 ..  60   nenhum botão apertado   (medido:   0)
+  764 .. 814   Pausa / ON-OFF          (medido: 789)
+  824 .. 874   Roupas Mais Secas       (medido: 849)
+  906 .. 956   Enxágue Duplo           (medido: 931)
 ```
+
+Os quatro valores foram **medidos nesta placa**, não herdados do C++ —
+veja [a seção do ADC](#9-o-que-mudou-em-relação-ao-firmware-c).
 
 Leitura de **10 bits** (0..1023) — é o que fixa a resolução do ADC em
 [mcu/adc.rs](src/mcu/adc.rs). As faixas estão em
@@ -967,15 +970,21 @@ Anote `VREFINT` e os patamares dos botões em duas ou três placas
 
 ### A normalização, e a trava que a torna segura
 
-A correção está **implementada e testada**, mas sai de fábrica
-**inerte**: `VREFINT_REFERENCIA` em [botoes.rs](src/botoes.rs) vale
-zero, e com isso `normaliza()` devolve a leitura como veio.
+A correção está **ligada**: `VREFINT_REFERENCIA` em
+[botoes.rs](src/botoes.rs) vale **376**, medido na placa de referência
+(leituras de 375, 376 e 378 em amostras seguidas — ±1,5 contagem de
+ruído).
 
-Falta um número, e só um: a leitura de `VREFINT` **na placa onde as
-faixas foram medidas**. Sem ele não há conta — a correção é a razão
-entre o `VREFINT` da calibração e o de agora. Rode
-`python -I ferramentas/le_adc.py` nessa placa e ele imprime a linha
-pronta para colar.
+Na própria placa de referência a correção é 1:1 e não muda nada. Ela só
+age em placas cujo `VREFINT` difira, que é exatamente o caso que a
+motivou.
+
+**A aferição cruzada que esse número deu de brinde.** 376 de 1023
+contra a VDDA significa `VREFINT ≈ 0,367 × VDDA`. Com a referência
+interna destes chips em ~1,21 V, isso põe a VDDA em **3,28 a 3,30 V** —
+o nominal. Três coisas se confirmam de uma vez, por caminho
+independente: o canal 14 é mesmo o `VREFINT`, a escala de 10 bits está
+certa, e a fonte desta placa está no lugar.
 
 **A trava.** A normalização é certa num caso e errada no outro: num
 divisor ratiométrico a leitura já estava correta, e normalizar
@@ -1002,14 +1011,12 @@ Detalhe curioso: o firmware C++ de fábrica **habilitou** o canal
 `VREFINT` (`ADC_CHANNEL_VREFINT` no `.ioc`) e nunca o leu. Alguém já
 teve essa dúvida e deixou o gancho pronto.
 
-Ficaram dois pontos a confirmar em bancada:
+Dos pontos que ficaram para a bancada:
 
-* **A faixa do Enxágue Duplo nunca foi medida.** Só a de Pausa foi
-  (789). As de Mais Secas e Enxágue Duplo vêm do mesmo deslocamento de
-  −31 — a de Mais Secas já se mostrou boa na prática, a de Enxágue
-  Duplo ainda não foi exercitada. Para medir: build de bancada, segurar
-  cada botão ~1 s e rodar `python -I ferramentas/le_adc.py`, que lista
-  os patamares e diz em que faixa cada um cai.
+* **As três faixas foram medidas** — essa pendência está encerrada.
+  Pausa deu 789, Mais Secas 849 e Enxágue Duplo 931, contra os 789,
+  851 e 931 que o deslocamento de −31 previa. O modelo acertou dentro
+  de 2 contagens.
 * **Debounce da tampa** — item 3 da tabela acima: 2 leituras de 21 ms
   (~42 ms) no lugar das ~250 leituras do laço livre do C++. Vale
   conferir se atende a abertura de tampa desta máquina.

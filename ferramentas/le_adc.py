@@ -19,6 +19,7 @@ este script. Aperte um botao do painel e rode de novo para comparar.
 O canal certo e o que MUDA quando voce aperta um botao: o divisor
 resistivo do painel mexe a tensao de um canal so.
 """
+import io
 import os
 import re
 import subprocess
@@ -61,12 +62,35 @@ CANAIS = {
 }
 
 # Faixas de botoes.rs, para a tabela dizer em que faixa cada valor cai.
-FAIXAS = [
-    ("repouso", 7, 60),
-    ("PAUSA", 795, 845),
-    ("MAIS SECAS", 857, 907),
-    ("ENXAGUE DUPLO", 937, 987),
-]
+def faixas_do_firmware():
+    """Le as faixas direto de src/botoes.rs.
+
+    Elas JA estiveram escritas aqui na mao, e deu errado: o firmware
+    mudou e o script continuou reportando as faixas antigas, dizendo
+    "NENHUMA" para valores que o firmware reconhecia perfeitamente.
+    Fonte unica agora.
+    """
+    arquivo = os.path.join(RAIZ, "src", "botoes.rs")
+    src = io.open(arquivo, encoding="utf-8").read()
+    nomes = [
+        ("repouso", "REPOUSO"),
+        ("PAUSA", "FAIXA_PAUSE"),
+        ("MAIS SECAS", "FAIXA_MAIS_SECAS"),
+        ("ENXAGUE DUPLO", "FAIXA_ENXAGUE_DUPLO"),
+    ]
+    saida = []
+    for rotulo, constante in nomes:
+        m = re.search(
+            r"const %s:\s*\(u16,\s*u16\)\s*=\s*\((\d+),\s*(\d+)\)" % constante,
+            src,
+        )
+        if not m:
+            sys.exit("nao achei a constante %s em %s" % (constante, arquivo))
+        saida.append((rotulo, int(m.group(1)), int(m.group(2))))
+    return saida
+
+
+FAIXAS = faixas_do_firmware()
 
 
 def roda(cmd, **kw):
