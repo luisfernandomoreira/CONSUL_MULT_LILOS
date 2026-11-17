@@ -811,6 +811,7 @@ src/
 
 ferramentas/
 ├── confere_contra_cpp.py   compara as tabelas com o firmware C++
+├── gera_hex.py             gera e confere o .hex de producao
 ├── le_adc.py               le os canais do ADC da placa por SWD
 └── testa_logica.rs         testes da logica pura, rodam no PC
 
@@ -1115,23 +1116,68 @@ target-gen pack GigaDevice.GD32C2x1_DFP.1.1.0.pack target-probe/
 ### Gerar o .hex para o gravador de produção
 
 ```bash
-cargo objcopy --release -- -O ihex consul_mult_lilos.hex
+python -I ferramentas/gera_hex.py
 ```
 
-Esse `.hex` também serve para o **GD32 All-In-One Programmer** com um
-GD-Link. Ele **não é versionado**: é artefato de build. Depois de
-gerar, vale conferir que começa em `0x08000000` e termina antes de
-`0x0800FC00` — a página do estado salvo não entra na imagem.
+Compila o release, converte para Intel HEX e **confere o resultado** —
+é nessa última parte que está o valor.
 
-**Se der `error: no such command: objcopy`**, falta o `cargo-binutils`.
-Para gerar sem instalar nada, em PowerShell na raiz do projeto:
+A conferência existe por um motivo concreto: a última página da flash
+(`0x0800FC00`) guarda o estado do ciclo, e se a imagem crescer e invadir
+essa página o gravador sobrescreve o estado, matando a retomada após
+queda de energia — **sem erro de compilação e sem aviso nenhum**. O
+`memory.x` reserva a página, mas um `.hex` gerado do ELF errado passaria
+batido.
+
+Ele confere, e sai com código 1 se algo não fechar:
+
+* formato e checksum de todas as linhas;
+* começa em `0x08000000`, o vetor de reset;
+* termina antes de `0x0800FC00`;
+* cabe nos 64 KB do chip.
+
+E informa a folga até a página do estado — hoje **44 KB**.
+
+O `.hex` resultante serve no `probe-rs`, no GD-Link e no **GD32
+All-In-One Programmer**. Ele **não é versionado** (está no
+`.gitignore`): é artefato de build, sempre regerado do código.
+
+<details>
+<summary>Gerar na mão, sem o script</summary>
+
+O script acha o `objcopy` sozinho — `arm-none-eabi-objcopy`,
+`llvm-objcopy` do PATH, ou o do componente `llvm-tools`, que não entra
+no PATH. Para fazer à mão:
+
+```bash
+cargo build --release
+```
+
+```bash
+arm-none-eabi-objcopy -O ihex target/thumbv6m-none-eabi/release/consul_mult_lilos consul_mult_lilos.hex
+```
+
+Com o `cargo-binutils` instalado, `cargo objcopy --release -- -O ihex
+consul_mult_lilos.hex` faz o mesmo. Em PowerShell, sem instalar nada:
 
 ```powershell
-cargo build --release
 $objcopy = Get-ChildItem (rustc --print sysroot) -Recurse -Filter llvm-objcopy.exe |
     Select-Object -First 1 -ExpandProperty FullName
 & $objcopy -O ihex target/thumbv6m-none-eabi/release/consul_mult_lilos consul_mult_lilos.hex
 ```
+
+Gerando à mão, passe o resultado pela conferência do script, que não
+compila nem converte nesse modo:
+
+```bash
+python -I ferramentas/gera_hex.py --so-confere
+```
+
+Com um caminho depois do `--so-confere`, ele confere aquele arquivo —
+serve para validar uma imagem que veio de outra pessoa ou de outra
+ferramenta.
+
+</details>
 
 ### Tamanho
 
