@@ -533,6 +533,41 @@ etapa para a fase de desaceleração. Como a etapa já leu o relógio no
 começo da passada, o corte só vale na passada seguinte — o mesmo
 comportamento do C++.
 
+#### O atuador fica ligado a etapa toda
+
+Vale saber, porque surpreende quem olha o painel: **PA3 liga no começo
+da centrifugação e só desliga no fim**, 9 a 14 minutos depois. E PA3 é
+o mesmo pino da válvula de amaciante (ver a
+[seção 10](#10-dois-pinos-com-dois-nomes)) — então, olhando de fora,
+"a válvula de amaciante ligou e não desliga mais".
+
+Não é defeito, e não é do porte: o C++ faz igual. `Atuador(true)`
+aparece em três pontos da etapa e `Atuador(false)` num só, na fase
+982–991.
+
+| Modelo | Mais secas | PA3 energizado |
+|--------|-----------|----------------|
+| 1, 2, 6 | desligado | 9 min 27 s |
+| 1, 2, 6 | ligado | 14 min 27 s |
+| 5 | (ignora o botão) | 9 min 27 s |
+| **3, 4** | qualquer | **nunca** — drenam só com a bomba |
+
+Essa última linha é o que explica a intenção: os modelos que **não**
+usam o atuador na centrifugação drenam só com a bomba. Nos outros o
+atuador é o que mantém a transmissão engatada na centrifugação, e por
+isso tem de ficar energizado o tempo todo. Desligá-lo no meio
+desengataria.
+
+Para conferir a linha do tempo de qualquer etapa sem placa:
+
+```bash
+python -I ferramentas/linha_do_tempo.py centrifugar 1 --mais-secas
+```
+
+Ele lê as tabelas de fases direto de [maquina.rs](src/maquina.rs) e
+imprime cada transição, separando o **tempo real** do valor do relógio
+— que divergem depois do corte.
+
 ### DESLIGAR
 
 Apaga os três LEDs, desliga todos os triacs, para os dois relógios e o
@@ -815,6 +850,7 @@ src/
 ferramentas/
 ├── confere_contra_cpp.py   compara as tabelas com o firmware C++
 ├── gera_hex.py             gera e confere o .hex de producao
+├── linha_do_tempo.py       simula as saidas de uma etapa, segundo a segundo
 ├── le_adc.py               le os canais do ADC da placa por SWD
 └── testa_logica.rs         testes da logica pura, rodam no PC
 
