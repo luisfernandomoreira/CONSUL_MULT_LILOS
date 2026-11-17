@@ -751,6 +751,14 @@ impl<'a> Maquina<'a> {
     async fn enxague_drenar(&mut self, m: u8, total: u16, num_enxagues: u8) {
         let bomba_sozinha = m == 3 || m == 4;
 
+        // O pressostato pode voltar a indicar água durante os pulsos.
+        // Corta os dois sentidos antes de qualquer retorno, inclusive
+        // durante o atraso de estabilização.
+        if self.nivel_agua {
+            agita::desliga_motores(self.s);
+            agita::liga_timer(false);
+        }
+
         // Atraso longo de estabilização.
         if relogio::delay_25() < relogio::MIN_DELAY_25 {
             if (70..=85).contains(&total) {
@@ -933,6 +941,13 @@ impl<'a> Maquina<'a> {
         let m = self.obter_modelo_atual().await;
         if self.interface_erro {
             return;
+        }
+
+        // Não basta deixar de emitir novos pulsos: o comando anterior
+        // pode ter deixado o motor ligado quando o nível voltou.
+        if self.nivel_agua {
+            agita::desliga_motores(self.s);
+            agita::liga_timer(false);
         }
 
         let total = relogio::total_segundos();
@@ -1380,9 +1395,7 @@ impl<'a> Maquina<'a> {
         self.num_enxagues_executado = 1;
         self.reutilizacao_de_agua = false;
         self.reinicia_tempo_apos_drenar_agua = true;
-        self.molho_ciclo_atual = 1;
-        self.molho_modo = ModoMolho::Molho;
-        self.molho_modo_prev = ModoMolho::Molho;
+        self.reinicia_molho();
 
         self.flash_etapa = 0;
         relogio::liga(false);
@@ -1601,10 +1614,20 @@ impl<'a> Maquina<'a> {
     /// Apertar qualquer botão com a máquina desligada a liga.
     fn garantir_ligado(&mut self, etapa_atual: Etapa) {
         if etapa_atual == Etapa::Desligar {
+            self.reinicia_molho();
             self.flash_etapa = 0;
             let m = modelo::do_chave(self.e.chave_modelo());
             self.define_etapa_por_tipo(m);
         }
+    }
+
+    /// Uma nova lavagem não deve herdar a fase nem a contagem do molho.
+    fn reinicia_molho(&mut self) {
+        self.molho_ciclo_atual = 1;
+        self.molho_modo = ModoMolho::Molho;
+        self.molho_modo_prev = ModoMolho::Molho;
+        agita::liga_timer(false);
+        agita::zera();
     }
 
     /// Esquece o erro e zera a contagem de quedas de nivel.
