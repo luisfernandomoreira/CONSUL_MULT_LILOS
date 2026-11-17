@@ -19,8 +19,9 @@ A placa é a mesma. Só mudou o microcontrolador e a linguagem.
 |---|---|
 | **Entender** | [1. Por que a placa não muda](#1-por-que-a-placa-não-muda) · [2. Uma placa, oito lavadoras](#2-uma-placa-oito-lavadoras) · [3. O painel](#3-o-painel) |
 | **Como funciona** | [4. O modelo de execução](#4-o-modelo-de-execução) · [5. A lógica do ciclo](#5-a-lógica-do-ciclo) · [6. O que para o ciclo](#6-o-que-para-o-ciclo) |
-| **Referência** | [7. Mapa dos arquivos](#7-mapa-dos-arquivos) · [8. O que mudou em relação ao C++](#8-o-que-mudou-em-relação-ao-firmware-c) · [9. Dois pinos com dois nomes](#9-dois-pinos-com-dois-nomes) · [10. Mapa de pinos](#10-mapa-de-pinos) · [11. Estado salvo na flash](#11-estado-salvo-na-flash) |
-| **Trabalhar** | [12. Compilar e gravar](#12-compilar-e-gravar) · [13. Alvo de compilação](#13-alvo-de-compilação--por-que-thumbv6m-e-não-thumbv8mbase) · [14. O PAC](#14-o-pac) · [15. Como mexer no firmware](#15-como-mexer-no-firmware) |
+| **Em campo** | [7. Proteções e códigos de erro](#7-proteções-e-códigos-de-erro) |
+| **Referência** | [8. Mapa dos arquivos](#8-mapa-dos-arquivos) · [9. O que mudou em relação ao C++](#9-o-que-mudou-em-relação-ao-firmware-c) · [10. Dois pinos com dois nomes](#10-dois-pinos-com-dois-nomes) · [11. Mapa de pinos](#11-mapa-de-pinos) · [12. Estado salvo na flash](#12-estado-salvo-na-flash) |
+| **Trabalhar** | [13. Compilar e gravar](#13-compilar-e-gravar) · [14. Alvo de compilação](#14-alvo-de-compilação--por-que-thumbv6m-e-não-thumbv8mbase) · [15. O PAC](#15-o-pac) · [16. Como mexer no firmware](#16-como-mexer-no-firmware) |
 
 ---
 
@@ -135,7 +136,7 @@ Os três piscando juntos = erro. O **ritmo** diz qual:
 | Ritmo dos três LEDs | Significa |
 |---------------------|-----------|
 | 2 piscadas de 500 ms e para | boot normal |
-| **N piscadas, pausa escura, repete** | protecão disparou — conte o N na [tabela de códigos](#protecões-e-códigos-de-erro) |
+| **N piscadas, pausa escura, repete** | proteção disparou — conte o N na [seção 7](#7-proteções-e-códigos-de-erro) |
 | pisca lento (700 ms), sem parar | chave de modelo inválida |
 | pisca rápido (250 ms), sem parar | falha ao gravar na flash |
 | padrão irregular de 301 ms | auto-teste rodando |
@@ -204,7 +205,7 @@ Para esta máquina isso cai como uma luva:
 
 A única interrupção ativa é o **SysTick**, que é do núcleo. Nenhuma
 interrupção de periférico é usada — ver a
-[seção 13](#13-alvo-de-compilação--por-que-thumbv6m-e-não-thumbv8mbase).
+[seção 14](#14-alvo-de-compilação--por-que-thumbv6m-e-não-thumbv8mbase).
 
 ### A cadência de 21 ms
 
@@ -600,7 +601,7 @@ funções de escolha em `agita.rs`, uma por contexto (`etapa_agitar`,
 | **Pausa (ON/OFF)** | idem | apertar o ON/OFF de novo |
 | **Seletor girado** | recomeça no programa novo | 2 s (modelo 6: ON/OFF) |
 | **Modelo inválido** | LEDs piscando 700 ms, nada liga | corrigir a chave |
-| **Proteção disparou** | tudo desligado, painel piscando o código | apertar ON/OFF ou girar o seletor |
+| **Proteção disparou** | tudo desligado, painel piscando o código ([seção 7](#7-proteções-e-códigos-de-erro)) | apertar ON/OFF ou girar o seletor |
 | **Lavagem econômica** | pausa na entrada do enxágue | abrir a tampa |
 
 Dois detalhes que não são óbvios:
@@ -613,57 +614,163 @@ Dois detalhes que não são óbvios:
   ON/OFF fica piscando até alguém apertar o botão. É uma exigência
   daquela lavadora, não uma inconsistência.
 
-### Proteções e códigos de erro
+---
 
-Esta placa não tem display, então a proteção que disparou se anuncia
-pelo **número de piscadas** dos três LEDs juntos. O técnico conta as
-piscadas em campo, sem gravador e sem nada ligado.
+## 7. Proteções e códigos de erro
 
-Os números são os mesmos das outras placas da linha, para não haver uma
-tabela por produto.
+Esta placa não tem display. Quando uma proteção dispara, a máquina
+**para com tudo desligado** e o painel anuncia o que aconteceu pelo
+**número de piscadas** dos três LEDs juntos.
 
-| Piscadas | Erro | O que aconteceu | O que suspeitar |
-|----------|------|-----------------|-----------------|
-| **2** | `Nivel` | o nível caiu sozinho 3 vezes na mesma lavagem | vazamento, mangueira solta, pressostato |
-| **3** | `Encher` | 50 min enchendo e o nível não chegou | torneira fechada, válvula de sabão, pressostato |
-| **4** | `Drenar` | 6 min drenando e o tanque não esvaziou | bomba, mangueira dobrada, filtro entupido |
+O técnico conta as piscadas em campo, sem gravador, sem notebook e sem
+abrir nada. Os números são os mesmos das outras placas da linha — quem
+aprendeu numa, leu todas.
+
+### As três proteções
+
+| Proteção | O que vigia | Dispara quando |
+|----------|-------------|----------------|
+| `Encher` | o pressostato durante o enchimento | passam **50 min** e o nível não chegou — vale para ENCHER e para a entrada de água do enxágue |
+| `Drenar` | o pressostato durante a drenagem | passam **6 min** com água ainda no tanque — vale para o enxágue e para a centrifugação |
+| `Nivel` | o pressostato nas etapas que retêm água | o nível cai sozinho pela **3ª vez na mesma lavagem** — em AGITAR, MOLHO ou no molho do enxágue |
+
+A de `Nivel` merece explicação. Perder o nível **uma vez** é normal:
+espuma assentando solta o pressostato, e o ciclo simplesmente volta a
+encher — é o que o firmware C++ faz, sempre. O problema é fazer isso
+para sempre: com um vazamento, a máquina encheria e esvaziaria a noite
+toda sem ninguém saber. Então a terceira recuperação na mesma lavagem
+vira erro. O limite está em `LIMITE_RECUPERACOES_NIVEL`, em
+[maquina.rs](src/maquina.rs).
+
+### Os códigos piscados
+
+Cada piscada é **250 ms acesa e 250 ms apagada**. Terminada a contagem,
+o painel fica **1,5 s escuro** e tudo recomeça — para sempre, até
+alguém intervir.
+
+| Piscadas | Erro | O que suspeitar, nesta ordem |
+|----------|------|------------------------------|
+| **2** | `Nivel` | vazamento no tanque ou na mangueira · mangueira de saída solta ou caída · pressostato com mau contato |
+| **3** | `Encher` | torneira fechada ou entupida · válvula de sabão (PA2) · pressostato preso em "cheio" |
+| **4** | `Drenar` | bomba (PB2) · mangueira de saída dobrada ou alta demais · filtro entupido · pressostato preso em "cheio" |
 
 ```text
-Drenar (4 piscadas):
+2 piscadas — Nivel
 
-  ▀▀▀▀▀_____▀▀▀▀▀_____▀▀▀▀▀_____▀▀▀▀▀___________________________________
-  └ 250 ms acesa, 250 ms apagada ────────────┘└──── 1,5 s escuro ─────┘
-  └─────────────── uma repetição: 3,5 s ────────────────────────────────┘
+  ▀▀__▀▀__________________▀▀__▀▀__________________▀▀__▀▀_____ ...
+  └ 1 s ┘└──── 1,5 s ────┘
+  └──────── 2,5 s ───────┘
+
+3 piscadas — Encher
+
+  ▀▀__▀▀__▀▀______________▀▀__▀▀__▀▀______________▀▀__▀▀__▀▀_ ...
+  └─ 1,5 s ─┘└─── 1,5 s ─┘
+  └────────── 3 s ───────┘
+
+4 piscadas — Drenar
+
+  ▀▀__▀▀__▀▀__▀▀__________▀▀__▀▀__▀▀__▀▀__________▀▀__▀▀__▀▀_ ...
+  └─── 2 s ────┘└─ 1,5 s ┘
+  └─────────── 3,5 s ────┘
 ```
 
-A contagem **começa em 2** de propósito: uma piscada só se confundiria
-com o pisca de tampa aberta, que é o LED de ON/OFF sozinho. E a pausa
-escura é três vezes mais longa que o intervalo entre piscadas, senão
-não se sabe onde a contagem começa.
+Duas escolhas de projeto que facilitam a contagem:
 
-Quem define o código é `Erro::piscadas()`, em [erro.rs](src/erro.rs) —
-uma linha por erro. Para acrescentar um erro, dê a ele um número ainda
-não usado; os testes de `ferramentas/testa_logica.rs` reprovam se dois
-erros piscarem a mesma quantidade.
+* **Começa em 2.** Uma piscada só se confundiria com o pisca de tampa
+  aberta, que é o LED de ON/OFF sozinho.
+* **A pausa escura é 3× o intervalo entre piscadas.** Se fosse do mesmo
+  tamanho, não dava para saber onde a contagem começa.
 
-**O erro trava a máquina** com tudo desligado, até alguém apertar
-ON/OFF ou girar o seletor. Ele **não vai para a flash**: depois de uma
-queda de energia a máquina retoma a etapa que estava rodando, e se a
-falha for real ela dispara de novo em minutos.
+### Como sair do erro
+
+| Gesto | Efeito |
+|-------|--------|
+| **ON/OFF** | desliga a máquina; o ciclo recomeça do zero no próximo toque |
+| **Girar o seletor** | sai do erro já no programa novo |
+| Abrir a tampa | **não** sai — o erro continua piscando |
+| Cortar a energia | **não** volta para o erro ao religar |
+
+Essa última merece atenção: **o erro não vai para a flash**. Ao
+religar, a máquina retoma a etapa que estava rodando. Se a falha for
+real, a proteção dispara de novo em minutos; se tiver sido um susto, o
+ciclo continua. É de propósito — uma placa que volta travada da queda
+de luz é pior que uma que tenta mais uma vez.
+
+Não se retoma um ciclo de cima de uma proteção que disparou: sair pelo
+ON/OFF desliga a máquina, e a lavagem começa do início.
 
 ### Os dois avisos que não são código
 
-Estes piscam continuamente e **se curam sozinhos** quando a causa sai,
-então não travam a máquina e não têm número:
+Estes piscam **continuamente**, sem contagem e sem pausa escura, e
+**se curam sozinhos** quando a causa sai. Por isso não travam a
+máquina e não têm número:
 
-| Aviso | Ritmo | Por que não trava |
-|-------|-------|-------------------|
-| Chave de modelo inválida | 700 ms | o técnico corrige a chave e o aviso sai; travar obrigaria a apertar ON/OFF depois |
-| Falha ao gravar na flash | 250 ms | a tarefa de gravação fica tentando; se a próxima der certo, o ciclo segue |
+| Aviso | Ritmo | O que é | Por que não trava |
+|-------|-------|---------|-------------------|
+| Chave de modelo inválida | pisca lento, **700 ms** | SW1..SW4 numa combinação que não existe | o técnico corrige a chave e o aviso sai sozinho; travar obrigaria a apertar ON/OFF depois de consertar |
+| Falha ao gravar na flash | pisca rápido, **250 ms** | a página de estado não aceitou a gravação | a tarefa de gravação fica tentando; se a próxima der certo, o ciclo segue |
+
+```text
+Modelo inválido (700 ms)
+
+  ▀▀▀▀▀▀_______▀▀▀▀▀▀_______▀▀▀▀▀▀_______▀▀▀▀▀▀_______ ...
+
+Falha de flash (250 ms)
+
+  ▀▀__▀▀__▀▀__▀▀__▀▀__▀▀__▀▀__▀▀__▀▀__▀▀__▀▀__▀▀__▀▀__ ...
+```
+
+Nenhum dos dois se confunde com um código de erro: **código tem pausa
+escura**, aviso contínuo não tem.
+
+### Tudo que o painel pode estar fazendo
+
+Uma tabela só, para quando a pergunta é "o que essa placa está
+tentando me dizer?":
+
+| O que você vê | Significa |
+|---------------|-----------|
+| 2 piscadas dos três LEDs e para | boot normal, logo após ligar |
+| **N piscadas, pausa escura, repete** | proteção disparou — conte o N na tabela acima |
+| pisca lento (700 ms) sem parar | chave de modelo inválida |
+| pisca rápido (250 ms) sem parar | falha ao gravar na flash |
+| só o LED de **ON/OFF** piscando | tampa aberta, ou máquina em pausa |
+| LED de ON/OFF aceso fixo | ciclo rodando |
+| LEDs de opção acesos | "mais secas" e/ou "enxágue duplo" ligados |
+| padrão irregular a cada 301 ms | auto-teste de linha (chave no modelo 7) |
+| tudo apagado | máquina desligada |
+
+### Onde isso vive no código
+
+O enum e os números estão em [erro.rs](src/erro.rs), um módulo **sem
+nenhuma dependência de hardware** — de propósito, para os testes
+poderem rodar no PC:
+
+```rust
+pub const fn piscadas(self) -> u64 {
+    match self {
+        Erro::Nivel => 2,
+        Erro::Encher => 3,
+        Erro::Drenar => 4,
+    }
+}
+```
+
+Para acrescentar uma proteção: dê a ela um número ainda não usado,
+chame `entra_em_erro(Erro::NovoErro)` de onde a condição é detectada, e
+acrescente a linha na tabela acima.
+
+Os testes de `ferramentas/testa_logica.rs` reprovam se **dois erros
+piscarem a mesma quantidade** — seriam indistinguíveis em campo —, se a
+contagem começar abaixo de 2 ou passar de 6, e se algum erro ficar sem
+nome. Rode-os com a receita da [seção 13](#13-compilar-e-gravar).
+
+Para provocar cada proteção na bancada, veja o passo 12 do
+[Roteiro de bancada](ROTEIRO_BANCADA.md).
 
 ---
 
-## 7. Mapa dos arquivos
+## 8. Mapa dos arquivos
 
 ```text
 src/
@@ -706,7 +813,7 @@ portável.
 
 ---
 
-## 8. O que mudou em relação ao firmware C++
+## 9. O que mudou em relação ao firmware C++
 
 O comportamento é o mesmo. Onde o porte não é literal, é por um destes
 motivos:
@@ -724,7 +831,7 @@ motivos:
 | 9 | uma leitura do ADC vale na hora | só vale depois de **se repetir** (±20) | a tensão do divisor sobe gradualmente; uma amostra isolada no meio da subida caía na faixa de outro botão. Era o *Mais Secas* desligando a máquina |
 | 10 | `VerificarMudancaEncoder` age na primeira leitura diferente | age depois de **duas leituras iguais** (81–162 ms) | oscilação de contato do seletor recomeçava o ciclo sozinha; e girar devagar disparava uma gravação na flash por posição atravessada |
 | 11 | falha de flash congela a etapa, mas deixa os triacs como estavam | desliga os triacs, para os relógios e pisca o erro | o C++ só faz `return` na etapa; aqui a saída já ligada é cortada. Ao recuperar, a estabilização é refeita |
-| 12 | tempo estourado pisca os LEDs e **continua tentando**; nível que cai volta a encher **para sempre** | protecão **trava** a máquina com um código contado, e a terceira queda de nível na mesma lavagem é erro | sem isso, torneira fechada deixa a máquina enchendo a noite toda, e um vazamento enche e esvazia indefinidamente. Os códigos são os mesmos das outras placas da linha. O limite de 3 recuperações está em `LIMITE_RECUPERACOES_NIVEL` |
+| 12 | tempo estourado pisca os LEDs e **continua tentando**; nível que cai volta a encher **para sempre** | proteção **trava** a máquina com um código contado, e a terceira queda de nível na mesma lavagem é erro | sem isso, torneira fechada deixa a máquina enchendo a noite toda, e um vazamento enche e esvazia indefinidamente. Os códigos são os mesmos das outras placas da linha. O limite de 3 recuperações está em `LIMITE_RECUPERACOES_NIVEL` |
 
 Os itens 9, 10 e 11 têm a mesma raiz: **um sinal lido uma única vez não
 é um sinal**. Nos três casos a correção foi exigir confirmação antes de
@@ -811,7 +918,7 @@ que se move. A referência da sequência correta do periférico é a seção
 
 ---
 
-## 9. Dois pinos com dois nomes
+## 10. Dois pinos com dois nomes
 
 O firmware C++ dá dois nomes a dois pinos, e o porte mantém isso:
 
@@ -828,7 +935,7 @@ amaciante: ela divide o pino com o atuador, que já é desligado ali.
 
 ---
 
-## 10. Mapa de pinos
+## 11. Mapa de pinos
 
 Toda saída é de **lógica invertida**: nível BAIXO liga, nível ALTO
 desliga (no C++, `ControlarPino(.., true)` escreve no BRR).
@@ -874,7 +981,7 @@ piscar na partida.
 
 ---
 
-## 11. Estado salvo na flash
+## 12. Estado salvo na flash
 
 A lavadora precisa voltar de onde parou quando a energia cai no meio do
 ciclo. Quatro valores vão na última página de 1 KB:
@@ -904,7 +1011,7 @@ O `memory.x` reserva essa página deixando o código em **63 KB**.
 
 ---
 
-## 12. Compilar e gravar
+## 13. Compilar e gravar
 
 ### Conferir contra o C++ antes de gravar (sem placa)
 
@@ -1038,7 +1145,7 @@ a placa por SWD. Os detalhes estão em [src/diag.rs](src/diag.rs) e no
 
 ---
 
-## 13. Alvo de compilação — por que `thumbv6m` e não `thumbv8m.base`
+## 14. Alvo de compilação — por que `thumbv6m` e não `thumbv8m.base`
 
 O Cortex-M23 é ARMv8-M Baseline, cujo alvo natural seria
 `thumbv8m.base-none-eabi`. O `lilos` 1.3, porém, ainda não reconhece
@@ -1071,7 +1178,7 @@ dispositivo.
 
 ---
 
-## 14. O PAC
+## 15. O PAC
 
 `crates/gd32c2x1-pac` é gerado por **svd2rust 0.37 + form** a partir de
 `svd/GD32C231.svd`, extraído do pack oficial da GigaDevice. O conteúdo
@@ -1083,7 +1190,7 @@ Nenhum endereço ou deslocamento de registrador é escrito à mão em
 
 ---
 
-## 15. Como mexer no firmware
+## 16. Como mexer no firmware
 
 ### Mudar um tempo de ciclo
 
@@ -1097,7 +1204,7 @@ Tudo em [tabelas.rs](src/tabelas.rs), indexado por `[modelo][programa]`:
 As fases de drenagem e de centrifugação (pulsos de motor) estão em
 `FASES_DRENAGEM` e `FASES_CENTRIFUGA`, em [maquina.rs](src/maquina.rs).
 
-Depois de mexer, rode o conferidor da [seção 12](#12-compilar-e-gravar)
+Depois de mexer, rode o conferidor da [seção 13](#13-compilar-e-gravar)
 — ele vai acusar a divergência contra o C++, que é exatamente o que
 você quer ver se a mudança foi intencional.
 
@@ -1138,7 +1245,7 @@ em nomes (`s.bomba(true)`, `e.tampa_aberta()`), nunca em "PA9".
 
 ---
 
-## 16. Referências
+## 17. Referências
 
 * Firmware C++ de fábrica — projeto CubeIDE `CONSUL_MULT_V1`, a referência deste porte
 * [BWG10_LILOS](https://github.com/luisfernandomoreira/BWG10_LILOS) — projeto irmão, de onde veio a base GD32 + lilos

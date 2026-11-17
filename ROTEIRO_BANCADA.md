@@ -417,6 +417,9 @@ Vale provocar cada uma na bancada, porque é mais fácil aqui que em
 campo. O painel pisca o código: **N piscadas, pausa escura de 1,5 s,
 repete**, até alguém apertar ON/OFF ou girar o seletor.
 
+A tabela completa dos códigos, com o que suspeitar em cada um, está na
+seção 7 do [README](README.md#7-proteções-e-códigos-de-erro).
+
 | Como provocar | Esperado |
 |---------------|----------|
 | Feche a torneira e ligue um programa | depois de 50 min, **3 piscadas** (`Encher`) |
