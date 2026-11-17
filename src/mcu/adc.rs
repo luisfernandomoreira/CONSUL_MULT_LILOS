@@ -34,6 +34,22 @@ use super::pac::{Adc, Rcu};
 /// firmware C++.
 pub const CANAL_BOTOES: u8 = 6;
 
+/// Canal da **referência interna de tensão** (VREFINT).
+///
+/// É uma tensão fixa do próprio chip, medida contra a VDDA — ou seja,
+/// contra a fonte de 3,3 V, que é a referência do ADC. Por ser fixa, a
+/// leitura dela **se move quando a fonte se move**, e é isso que a
+/// torna útil: dá para saber se a fonte desta placa está diferente da
+/// de outra, sem voltímetro.
+///
+/// Serve de aferição, não de referência: o conversor continua medindo
+/// contra a VDDA.
+///
+/// ⚠ O número do canal vem da mesma fonte do canal dos botões. Se a
+/// leitura vier absurda, confira no User Manual.
+#[cfg_attr(not(feature = "diag-botoes"), allow(dead_code))]
+pub const CANAL_VREFINT: u8 = 14;
+
 /// Quantos canais a sequência regular endereça (campo RSQ de 4 bits,
 /// e SPT0..SPT15 nos registradores de tempo de amostragem).
 ///
@@ -132,6 +148,31 @@ pub fn inicializa(rcu: &Rcu, adc: &Adc) {
 /// última leitura boa, como faz o firmware C++.
 pub fn converte(adc: &Adc) -> Option<u16> {
     converte_canal(adc, CANAL_BOTOES)
+}
+
+/// Mede a referência interna de tensão.
+///
+/// Liga o caminho interno do VREFINT, espera a estabilização que o
+/// manual pede e converte o canal 14. O caminho fica ligado depois —
+/// não custa nada e evita a espera na próxima leitura.
+///
+/// Como ler o resultado: a leitura é `VREFINT / VDDA`, então ela sobe
+/// quando a fonte **cai**. Comparando duas placas:
+///
+/// | VREFINT | Patamar do botão | Conclusão |
+/// |---|---|---|
+/// | igual | igual | as fontes são iguais; nada a discutir |
+/// | **muda** | igual | a fonte varia, mas o divisor acompanha — leitura **ratiométrica**, as faixas estão seguras |
+/// | **muda** | **muda junto, ao contrário** | o divisor **não** acompanha a fonte: as faixas vão errar de placa para placa |
+#[cfg(feature = "diag-botoes")]
+pub fn converte_vrefint(adc: &Adc) -> Option<u16> {
+    let ja_ligado = adc.ctl1().read().inrefen().bit_is_set();
+    if !ja_ligado {
+        adc.ctl1().modify(|_, w| w.inrefen().set_bit());
+        // O buffer da referência interna leva alguns microssegundos.
+        cortex_m::asm::delay(ESPERA_ESTABILIZACAO);
+    }
+    converte_canal(adc, CANAL_VREFINT)
 }
 
 /// Dispara uma conversão no canal pedido (0..15).

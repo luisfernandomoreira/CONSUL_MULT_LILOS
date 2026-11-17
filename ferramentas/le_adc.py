@@ -192,6 +192,21 @@ def main():
             print("  Se algum sair como NENHUMA, me passe o numero: e so")
             print("  ajustar a faixa correspondente em src/botoes.rs.")
 
+    # Referencia interna: afere a fonte desta placa contra outra.
+    vref = le(mapa["DIAG_VREFINT"], 1) if "DIAG_VREFINT" in mapa else None
+    if vref:
+        print("")
+        print("Referencia interna (VREFINT): %d" % vref[0])
+        print("  E VREFINT/VDDA, entao SOBE quando a fonte de 3,3 V CAI.")
+        print("  Anote junto com os patamares e compare entre placas:")
+        print("")
+        print("   VREFINT   patamar   conclusao")
+        print("   igual     igual     fontes iguais; nada a discutir")
+        print("   MUDA      igual     divisor acompanha a fonte: leitura")
+        print("                       RATIOMETRICA, faixas seguras")
+        print("   MUDA      MUDA      divisor NAO acompanha: as faixas vao")
+        print("                       errar de placa para placa")
+
     canais = le(mapa["DIAG_CANAIS"], NUM_CANAIS)
     minimos = le(mapa["DIAG_CANAIS_MIN"], NUM_CANAIS)
     maximos = le(mapa["DIAG_CANAIS_MAX"], NUM_CANAIS)

@@ -913,6 +913,67 @@ como esperada: mostra as duas escalas lado a lado e confere o que
 precisa valer — faixas sem sobreposição, largura igual à do C++ e o
 mesmo deslocamento nas três.
 
+### A referência do ADC é a fonte, e por que isso quase não importa
+
+O GD32C231 não tem pino VREF+ dedicado: o conversor mede **contra a
+VDDA**, que é a fonte de 3,3 V da placa. Então é natural perguntar se
+uma placa com 3,28 V e outra com 3,32 V não leriam valores diferentes
+nos botões.
+
+Leriam, **se a leitura não fosse ratiométrica.** Mas o divisor dos
+botões é alimentado pela mesma fonte que serve de referência, e aí a
+tensão da fonte cancela na conta:
+
+```text
+  leitura = Vin/Vref × 1023
+          = (VDD × k) / VDD × 1023      ← VDD sai dos dois lados
+          = k × 1023
+```
+
+A leitura depende só da **razão** dos resistores do divisor, não da
+tensão da fonte. É a mesma razão pela qual um potenciômetro ligado
+entre VDD e GND dá sempre a mesma leitura.
+
+Se **não** fosse ratiométrica, o risco seria concreto:
+
+| Botão | Para de responder | Responde como outro |
+|-------|-------------------|---------------------|
+| Pausa | 3,2% (105 mV) | 4,7% → vira Mais Secas |
+| Mais secas | 2,9% | 4,3% → vira Pausa |
+| Enxágue duplo | 2,7% | 5,9% → vira Mais Secas |
+
+Reguladores de 3,3 V têm tolerância de ±1% a ±3% — dentro da
+tolerância normal, portanto. Não é uma preocupação exagerada.
+
+**E o que os dados já dizem.** O desvio de 31 contagens que medimos
+nesta placa **não tem cara de problema de fonte**: diferença de fonte
+apareceria como erro de **escala** (proporcional), e o que medimos é
+**deslocamento**. Escala de 0,962 poria o repouso em 32; ele lê 0.
+
+### Como conferir isso entre placas, sem voltímetro
+
+O build de bancada lê a **referência interna de tensão** (`VREFINT`,
+canal 14). Ela é uma tensão fixa do chip medida contra a VDDA, então a
+leitura dela **sobe quando a fonte cai** — serve de aferição.
+
+Anote `VREFINT` e os patamares dos botões em duas ou três placas
+(`python -I ferramentas/le_adc.py`) e compare:
+
+| VREFINT | Patamar do botão | Conclusão |
+|---------|------------------|-----------|
+| igual | igual | as fontes são iguais; nada a discutir |
+| **muda** | igual | a fonte varia e o divisor acompanha — **ratiométrico, faixas seguras** |
+| **muda** | **muda junto** | o divisor **não** acompanha a fonte: as faixas vão errar de placa para placa |
+
+Se cair no terceiro caso, o conserto é normalizar a leitura pelo
+`VREFINT` antes de comparar com as faixas — mas não vale fazer isso
+**antes** de medir, porque num divisor ratiométrico a normalização
+*introduziria* o erro que deveria corrigir.
+
+Detalhe curioso: o firmware C++ de fábrica **habilitou** o canal
+`VREFINT` (`ADC_CHANNEL_VREFINT` no `.ioc`) e nunca o leu. Alguém já
+teve essa dúvida e deixou o gancho pronto.
+
 Ficaram dois pontos a confirmar em bancada:
 
 * **A faixa do Enxágue Duplo nunca foi medida.** Só a de Pausa foi

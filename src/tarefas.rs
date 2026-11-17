@@ -419,6 +419,11 @@ pub async fn diagnostico_botoes(s: &Saidas, adc_periferico: &Adc) -> Infallible 
                     diag::registra_canal(canal as usize, valor);
                 }
             }
+            // A referencia interna: afere a fonte desta placa contra
+            // outra, sem voltimetro.
+            if let Some(valor) = adc::converte_vrefint(adc_periferico) {
+                diag::registra_vrefint(valor);
+            }
         }
 
         // ── O ADC esta convertendo? ──

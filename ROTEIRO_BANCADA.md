@@ -292,6 +292,23 @@ produz um patamar próprio, então:
 É assim que se calibra [botoes.rs](src/botoes.rs) para uma placa nova:
 qualquer patamar que saia como `NENHUMA` é uma faixa a ajustar.
 
+#### Conferir a fonte entre placas
+
+O script também mostra o `VREFINT`, a referência interna de tensão. Ela
+é fixa no chip e medida contra a fonte de 3,3 V, então **sobe quando a
+fonte cai**.
+
+Anote `VREFINT` e os patamares dos botões em **duas ou três placas**:
+
+| VREFINT | Patamar | Conclusão |
+|---------|---------|-----------|
+| igual | igual | fontes iguais |
+| muda | igual | divisor acompanha a fonte — faixas seguras |
+| muda | muda junto | as faixas vão errar de placa para placa |
+
+Vale fazer uma vez, nas primeiras placas da série. Dando o segundo
+caso, a dúvida está encerrada para sempre.
+
 #### O log das últimas 64 leituras
 
 Para ver a sequência de valores em volta de um aperto:

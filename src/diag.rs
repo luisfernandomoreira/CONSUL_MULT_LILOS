@@ -300,3 +300,20 @@ pub fn registra_plato(valor: u16) {
         }
     }
 }
+
+/// Ultima leitura da referencia interna de tensao (canal 14).
+///
+/// E `VREFINT / VDDA`: sobe quando a fonte de 3,3 V cai. Comparando
+/// esta leitura entre placas descobre-se se as fontes diferem, e
+/// comparando com o patamar dos botoes descobre-se se o divisor
+/// acompanha a fonte. Ver `mcu::adc::converte_vrefint`.
+#[no_mangle]
+pub static mut DIAG_VREFINT: u16 = 0;
+
+/// Guarda a leitura da referencia interna.
+#[cfg(feature = "diag-botoes")]
+pub fn registra_vrefint(valor: u16) {
+    // SAFETY: escrita volatil num `static mut` que so a tarefa de
+    // diagnostico escreve.
+    unsafe { core::ptr::write_volatile(addr_of_mut!(DIAG_VREFINT), valor) }
+}
