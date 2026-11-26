@@ -73,6 +73,9 @@ enum ModoMolho {
 /// (24 MHz ÷ 24000 ÷ 301).
 const PISCA_MS: u64 = 301;
 
+/// Pisca lento na espera de reutilização de água do CWH12AB V1/V2.
+const PISCA_REUTILIZACAO_AGUA_MS: u64 = 700;
+
 /// Espera com as saídas desligadas depois de girar o seletor ou de
 /// fechar a tampa.
 const ESPERA_RETOMADA_MS: u64 = 2_000;
@@ -1249,7 +1252,12 @@ impl<'a> Maquina<'a> {
             }
         }
 
-        if self.pisca_estourou() {
+        let intervalo = if m == 1 && reutilizar_agua {
+            PISCA_REUTILIZACAO_AGUA_MS
+        } else {
+            PISCA_MS
+        };
+        if self.pisca_estourou_com_intervalo(intervalo) {
             self.s.pisca_led();
         }
         true
@@ -1307,10 +1315,14 @@ impl<'a> Maquina<'a> {
 
     /// `true` uma vez a cada `PISCA_MS`, enquanto o pisca estiver ligado.
     fn pisca_estourou(&mut self) -> bool {
+        self.pisca_estourou_com_intervalo(PISCA_MS)
+    }
+
+    fn pisca_estourou_com_intervalo(&mut self, intervalo_ms: u64) -> bool {
         if !self.pisca_ligado {
             return false;
         }
-        if self.ultimo_pisca.elapsed() < Millis(PISCA_MS) {
+        if self.ultimo_pisca.elapsed() < Millis(intervalo_ms) {
             return false;
         }
         self.ultimo_pisca = TickTime::now();
